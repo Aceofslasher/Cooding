@@ -8,7 +8,7 @@ import {
   Menu, MessageCircle, Moon, Play, Plus, RotateCcw, Send, Settings,
   ShieldCheck, Sparkles, Target, Terminal, X,
 } from 'lucide-react'
-import { lessonQuizzes, lessons, practiceExercises, readProgress } from './data/learningContent'
+import { emptyProgress, lessonQuizzes, lessons, practiceExercises, readProgress } from './data/learningContent'
 import LessonStudio from './components/LessonStudio'
 import { askTutor } from './services/tutorService'
 import { getAuthHeaders, isCloudConfigured, supabase } from './services/supabase'
@@ -106,17 +106,26 @@ function App() {
   }, [])
 
   useEffect(() => {
+    if (!authUser) return
     localStorage.setItem('codementor-progress', JSON.stringify(progress))
-  }, [progress])
+  }, [authUser, progress])
 
   useEffect(() => {
     if (!supabase) return undefined
     let active = true
+    const applySession = (session) => {
+      const user = session?.user ?? null
+      setAuthUser(user)
+      if (!user) {
+        setProgress(emptyProgress)
+        localStorage.removeItem('codementor-progress')
+      }
+    }
     supabase.auth.getSession().then(({ data }) => {
-      if (active) setAuthUser(data.session?.user ?? null)
+      if (active) applySession(data.session)
     })
     const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
-      setAuthUser(session?.user ?? null)
+      applySession(session)
     })
     return () => {
       active = false
@@ -252,9 +261,9 @@ function App() {
         </nav>
 
         <div className="sidebar-bottom">
-          <div className="streak-mini"><div className="streak-icon"><Flame size={16} /></div><div><strong>{progress.attempts.length ? 'Keep it going' : 'Your first session'}</strong><span>{progress.attempts.length ? 'Progress is saved on this device' : 'Start a lesson to begin'}</span></div></div>
+          <div className="streak-mini"><div className="streak-icon"><Flame size={16} /></div><div><strong>{progress.attempts.length ? 'Keep it going' : 'Your first session'}</strong><span>{authUser ? 'Progress is saved to your account' : 'Sign in to save your progress'}</span></div></div>
           <button className={`nav-link ${page === 'settings' ? 'nav-link-active' : ''}`} onClick={() => changePage('settings')}><Settings size={17} /><span>Profile & settings</span></button>
-          {authUser && <button className="nav-link signout-link" onClick={() => supabase.auth.signOut().then(() => setToast('Signed out'))}><LockKeyhole size={16} /><span>Sign out</span></button>}
+          {authUser && <button className="nav-link signout-link" onClick={() => supabase.auth.signOut().then(() => setToast('Signed out. Progress is only saved while signed in.'))}><LockKeyhole size={16} /><span>Sign out</span></button>}
           <button className="profile-row" onClick={() => changePage('settings')}>
             <span className="avatar">{(progress.displayName || 'L').slice(0, 1).toUpperCase()}</span>
             <span className="profile-copy"><strong>{progress.displayName || 'Learner'}</strong><small>{progress.skillLevel} learner</small></span>
@@ -280,8 +289,8 @@ function App() {
         {page === 'dashboard' && <Dashboard progress={progress} lessons={allLessons} onOpenLesson={openLesson} onNavigate={changePage} />}
         {page === 'learn' && <LearningPath progress={progress} lessons={allLessons} onOpenLesson={openLesson} />}
         {page === 'lesson-studio' && <LessonStudio lessons={customLessons} allLessons={allLessons} onAddLessons={addCustomLessons} onDeleteLesson={deleteCustomLesson} onOpenLesson={openLesson} />}
-        {page === 'lesson' && <LessonWorkspace key={currentLesson.id} lesson={currentLesson} lessons={allLessons} progress={progress} onCodeChange={setCurrentCode} onComplete={completeLesson} onRecordAttempt={recordAttempt} onRecordQuiz={recordQuiz} onBack={() => changePage('learn')} onPrevious={() => openLesson(allLessons[Math.max(0, allLessons.findIndex((lesson) => lesson.id === currentLesson.id) - 1)])} onNext={() => openLesson(allLessons[(allLessons.findIndex((lesson) => lesson.id === currentLesson.id) + 1) % allLessons.length])} />}
-        {page === 'playground' && <Playground onCodeChange={setCurrentCode} onRecordAttempt={recordAttempt} />}
+        {page === 'lesson' && <LessonWorkspace key={currentLesson.id} lesson={currentLesson} lessons={allLessons} progress={progress} authUser={authUser} onCodeChange={setCurrentCode} onComplete={completeLesson} onRecordAttempt={recordAttempt} onRecordQuiz={recordQuiz} onBack={() => changePage('learn')} onPrevious={() => openLesson(allLessons[Math.max(0, allLessons.findIndex((lesson) => lesson.id === currentLesson.id) - 1)])} onNext={() => openLesson(allLessons[(allLessons.findIndex((lesson) => lesson.id === currentLesson.id) + 1) % allLessons.length])} />}
+        {page === 'playground' && <Playground onCodeChange={setCurrentCode} onRecordAttempt={recordAttempt} isSignedIn={Boolean(authUser)} />}
         {page === 'practice' && <Practice progress={progress} onOpenLesson={openLesson} />}
         {page === 'tutor' && <TutorPage progress={progress} currentCode={currentCode} currentLesson={currentLesson} tutorLanguage={tutorLanguage} onMessagesChange={(messages) => setProgress((previous) => ({ ...previous, messages }))} />}
         {page === 'progress' && <ProgressPage progress={progress} lessons={allLessons} />}
@@ -378,7 +387,7 @@ function LessonRows({ lessons, progress, onOpenLesson }) {
   })}</div>
 }
 
-function LessonWorkspace({ lesson, lessons, progress, onCodeChange, onComplete, onRecordAttempt, onRecordQuiz, onBack, onPrevious, onNext }) {
+function LessonWorkspace({ lesson, lessons, progress, authUser, onCodeChange, onComplete, onRecordAttempt, onRecordQuiz, onBack, onPrevious, onNext }) {
   const [showExample, setShowExample] = useState(false)
   const complete = progress.lessonsCompleted.includes(lesson.id)
   const referenceUrl = lesson.referenceUrl || 'https://www.w3schools.com/js/'
@@ -386,7 +395,7 @@ function LessonWorkspace({ lesson, lessons, progress, onCodeChange, onComplete, 
     <button className="back-link" onClick={onBack}><ArrowLeft size={15} />Back to learning path</button>
     <div className="workspace-heading"><div><div className="lesson-row-meta"><span>{lesson.topic}</span><i />{lesson.level}<i /><Clock3 size={13} />{lesson.minutes} min</div><h1>{lesson.title}</h1><p>{lesson.description}</p></div><span className={`lesson-state ${complete ? 'lesson-state-done' : ''}`}>{complete ? <CheckCircle2 size={15} /> : <BookOpen size={15} />}{complete ? 'Completed' : 'In progress'}</span></div>
     <div className="workspace-grid"><section className="lesson-instructions"><div className="workspace-section-title"><span className="step-number">01</span><div><span className="eyebrow">THE IDEA</span><h2>What you will learn</h2></div></div><p className="lesson-explanation">{lesson.explanation}</p><div className="objective-box"><div className="objective-icon"><Target size={17} /></div><div><span>YOUR OBJECTIVE</span><strong>{lesson.objective}</strong></div></div><a className="reference-link" href={referenceUrl} target="_blank" rel="noreferrer">Read the W3Schools reference<ArrowUpRight size={14} /></a><div className="instruction-divider" /><div className="workspace-section-title compact-title"><span className="step-number">02</span><div><span className="eyebrow">YOUR TURN</span><h2>Try it yourself</h2></div></div><p className="exercise-prompt">Update the starter code so it produces the expected result. Run it to check your output.</p><div className="expected-output"><span>EXPECTED OUTPUT</span><code>{lesson.expectedOutput.split('\n').map((line, index) => <span key={index}>{line}</span>)}</code></div><button className="example-toggle" onClick={() => setShowExample((value) => !value)}><Lightbulb size={15} />{showExample ? 'Hide example' : 'Show example'}<ChevronDown className={showExample ? 'rotate-icon' : ''} size={14} /></button>{showExample && <pre className="example-code">{lesson.example}</pre>}</section>
-      <EditorWorkspace key={lesson.id} starterCode={lesson.starterCode} language={lesson.language} expectedOutput={lesson.expectedOutput} title={lesson.title} topic={lesson.topic} onCodeChange={onCodeChange} onRecordAttempt={onRecordAttempt} hint={lesson.hint} context={lesson} lessons={lessons} onComplete={() => onComplete(lesson)} onPrevious={onPrevious} onNext={onNext} />
+      <EditorWorkspace key={lesson.id} starterCode={lesson.starterCode} language={lesson.language} expectedOutput={lesson.expectedOutput} title={lesson.title} topic={lesson.topic} onCodeChange={onCodeChange} onRecordAttempt={onRecordAttempt} hint={lesson.hint} context={lesson} lessons={lessons} isSignedIn={Boolean(authUser)} onComplete={() => onComplete(lesson)} onPrevious={onPrevious} onNext={onNext} />
     </div>
     <QuizCheck lesson={lesson} onRecordQuiz={onRecordQuiz} />
   </div>
@@ -406,11 +415,11 @@ function QuizCheck({ lesson, onRecordQuiz }) {
   return <section className="quiz-panel"><div className="quiz-heading"><span className="quiz-icon"><ListChecks size={17} /></span><div><span className="eyebrow">QUICK KNOWLEDGE CHECK</span><h2>Pause and check your understanding</h2></div></div><p>{quiz.question}</p><div className="quiz-options">{quiz.choices.map((choice, index) => <label className={`quiz-option ${selected === index ? 'quiz-option-selected' : ''}`} key={choice}><input type="radio" name={`quiz-${lesson.id}`} checked={selected === index} onChange={() => { setSelected(index); setResult('') }} /><span>{choice}</span></label>)}</div><div className="quiz-footer"><span className={result.startsWith('Correct') ? 'quiz-result quiz-result-correct' : 'quiz-result'}>{result}</span><Button onClick={checkAnswer} disabled={selected === null}>Check answer<ArrowRight size={14} /></Button></div></section>
 }
 
-function Playground({ onCodeChange, onRecordAttempt }) {
-  return <div className="page-content workspace-page"><PageIntro eyebrow="A SPACE TO EXPERIMENT" title="Playground" description="Try an idea, inspect what happens, and follow your curiosity." /><EditorWorkspace starterCode={'const greeting = "Hello, world!";\nconsole.log(greeting);'} language="javascript" title="Untitled program" topic="Playground" onCodeChange={onCodeChange} onRecordAttempt={onRecordAttempt} isPlayground /></div>
+function Playground({ onCodeChange, onRecordAttempt, isSignedIn }) {
+  return <div className="page-content workspace-page"><PageIntro eyebrow="A SPACE TO EXPERIMENT" title="Playground" description="Try an idea, inspect what happens, and follow your curiosity." /><EditorWorkspace starterCode={'const greeting = "Hello, world!";\nconsole.log(greeting);'} language="javascript" title="Untitled program" topic="Playground" onCodeChange={onCodeChange} onRecordAttempt={onRecordAttempt} isSignedIn={isSignedIn} isPlayground /></div>
 }
 
-function EditorWorkspace({ starterCode, language, expectedOutput, title, topic, onCodeChange, onRecordAttempt, hint, context, lessons = [], onComplete, onPrevious, onNext, isPlayground = false }) {
+function EditorWorkspace({ starterCode, language, expectedOutput, title, topic, onCodeChange, onRecordAttempt, hint, context, lessons = [], onComplete, onPrevious, onNext, isPlayground = false, isSignedIn = false }) {
   const [code, setCode] = useState(starterCode)
   const [selectedLanguage, setSelectedLanguage] = useState(language)
   const [runId, setRunId] = useState(0)
@@ -487,6 +496,11 @@ function EditorWorkspace({ starterCode, language, expectedOutput, title, topic, 
   }
 
   async function getHint() {
+    setActiveOutputTab('feedback')
+    if (!isSignedIn) {
+      setFeedback('Sign in from Profile & settings to use AI hints and error explanations.')
+      return
+    }
     setBusy(true)
     setFeedback('Thinking through a hint...')
     const result = await askTutor({ question: 'Please give me a hint, not the full solution.', code, relatedLanguage: selectedLanguage, context: { ...context, title, topic, hint }, skillLevel: context?.skillLevel || 'Beginner' })
@@ -496,9 +510,13 @@ function EditorWorkspace({ starterCode, language, expectedOutput, title, topic, 
   }
 
   async function explainError() {
+    setActiveOutputTab('feedback')
+    if (!isSignedIn) {
+      setFeedback('Sign in from Profile & settings to use AI hints and error explanations.')
+      return
+    }
     if (runStatus !== 'error' || !output) {
       setFeedback('Run your code first so the tutor has an actual error message to explain.')
-      setActiveOutputTab('feedback')
       return
     }
     setBusy(true)
@@ -633,7 +651,7 @@ function HistoryPage({ progress }) {
     passed: quiz.score === quiz.totalQuestions,
     createdAt: quiz.completedAt,
   }))].sort((first, second) => new Date(second.createdAt) - new Date(first.createdAt))
-  return <div className="page-content"><PageIntro eyebrow="EVERY TRY COUNTS" title="Learning history" description="Review your past exercise attempts and see how your solutions changed." action={<span className="learning-count"><History size={15} />{attempts.length} recorded</span>} />{attempts.length ? <section className="history-table-wrap"><div className="history-table"><div className="history-header"><span>EXERCISE</span><span>TOPIC</span><span>RESULT</span><span>DATE</span></div>{attempts.map((attempt) => <div className="history-row" key={attempt.id}><div className="history-exercise"><span className={`attempt-status ${attempt.passed ? 'attempt-passed' : 'attempt-review'}`}>{attempt.passed ? <Check size={14} /> : <RotateCcw size={14} />}</span><span><strong>{attempt.title}</strong><small>{attempt.language}</small></span></div><span>{attempt.topic || 'Playground'}</span><span className={`history-result ${attempt.passed ? 'result-good' : 'result-retry'}`}>{attempt.passed ? 'Passed' : 'Needs another try'}</span><span>{new Date(attempt.createdAt).toLocaleString()}</span></div>)}</div></section> : <div className="history-empty"><div className="empty-glyph"><History size={20} /></div><h2>Your learning history starts with your first attempt</h2><p>When you submit an exercise, its result and date will appear here. Earlier attempts stay visible so you can review your progress.</p><span><ShieldCheck size={15} />Saved only in this browser</span></div>}</div>
+  return <div className="page-content"><PageIntro eyebrow="EVERY TRY COUNTS" title="Learning history" description="Review your past exercise attempts and see how your solutions changed." action={<span className="learning-count"><History size={15} />{attempts.length} recorded</span>} />{attempts.length ? <section className="history-table-wrap"><div className="history-table"><div className="history-header"><span>EXERCISE</span><span>TOPIC</span><span>RESULT</span><span>DATE</span></div>{attempts.map((attempt) => <div className="history-row" key={attempt.id}><div className="history-exercise"><span className={`attempt-status ${attempt.passed ? 'attempt-passed' : 'attempt-review'}`}>{attempt.passed ? <Check size={14} /> : <RotateCcw size={14} />}</span><span><strong>{attempt.title}</strong><small>{attempt.language}</small></span></div><span>{attempt.topic || 'Playground'}</span><span className={`history-result ${attempt.passed ? 'result-good' : 'result-retry'}`}>{attempt.passed ? 'Passed' : 'Needs another try'}</span><span>{new Date(attempt.createdAt).toLocaleString()}</span></div>)}</div></section> : <div className="history-empty"><div className="empty-glyph"><History size={20} /></div><h2>Your learning history starts with your first attempt</h2><p>When you submit an exercise, its result and date will appear here. Earlier attempts stay visible so you can review your progress.</p><span><ShieldCheck size={15} />Saved while you are signed in</span></div>}</div>
 }
 
 function AuthPanel({ authUser, onSignOut }) {
@@ -669,7 +687,7 @@ function SettingsPage({ progress, authUser, onSignOut, onSave }) {
   const [name, setName] = useState(progress.displayName)
   const [level, setLevel] = useState(progress.skillLevel)
   const [language, setLanguage] = useState(progress.preferredLanguage)
-  return <div className="page-content"><PageIntro eyebrow="MAKE IT YOURS" title="Profile & settings" description="Choose how you want to learn. Your preferences are saved on this device." /><div className="settings-layout"><div className="settings-stack"><section className="settings-form"><div className="settings-section-heading"><span className="settings-section-icon"><Settings size={17} /></span><div><h2>Learning preferences</h2><p>These details help tailor examples and explanations.</p></div></div><label className="field-label">Display name<input value={name} onChange={(event) => setName(event.target.value)} maxLength={50} /></label><label className="field-label">Current skill level<select value={level} onChange={(event) => setLevel(event.target.value)}><option>Beginner</option><option>Intermediate</option><option>Advanced</option></select></label><label className="field-label">Preferred language<select value={language} onChange={(event) => setLanguage(event.target.value)}><option>JavaScript</option><option>Python</option><option>HTML & CSS</option></select></label><Button variant="dark" onClick={() => onSave({ displayName: name.trim() || 'Learner', skillLevel: level, preferredLanguage: language })}><Check size={15} />Save preferences</Button></section><AuthPanel authUser={authUser} onSignOut={onSignOut} /></div><aside className="settings-connection"><span className="eyebrow">DATA & PRIVACY</span><h2>{authUser ? 'Your cloud account is active' : isCloudConfigured ? 'Supabase is configured' : 'Local learning mode'}</h2><p>{authUser ? 'Your progress is loading from your private account and new activity syncs as you learn.' : isCloudConfigured ? 'Sign in to sync your progress. Apply the included migration before using cloud records.' : 'Your lessons, attempts, and tutor messages are stored in this browser. Add Supabase keys and apply the database migration to enable cloud services.'}</p><div className="connection-status"><span className={authUser ? 'connected-dot' : ''} />{authUser ? 'Signed in and syncing' : isCloudConfigured ? 'Sign in for private cloud sync' : 'No cloud credentials detected'}</div><div className="privacy-note"><LockKeyhole size={15} /><span>Never put a Supabase service-role key or AI provider key in browser environment variables.</span></div></aside></div></div>
+  return <div className="page-content"><PageIntro eyebrow="MAKE IT YOURS" title="Profile & settings" description="Choose how you want to learn. Preferences are saved while you are signed in." /><div className="settings-layout"><div className="settings-stack"><section className="settings-form"><div className="settings-section-heading"><span className="settings-section-icon"><Settings size={17} /></span><div><h2>Learning preferences</h2><p>These details help tailor examples and explanations.</p></div></div><label className="field-label">Display name<input value={name} onChange={(event) => setName(event.target.value)} maxLength={50} /></label><label className="field-label">Current skill level<select value={level} onChange={(event) => setLevel(event.target.value)}><option>Beginner</option><option>Intermediate</option><option>Advanced</option></select></label><label className="field-label">Preferred language<select value={language} onChange={(event) => setLanguage(event.target.value)}><option>JavaScript</option><option>Python</option><option>HTML & CSS</option></select></label><Button variant="dark" onClick={() => onSave({ displayName: name.trim() || 'Learner', skillLevel: level, preferredLanguage: language })}><Check size={15} />Save preferences</Button></section><AuthPanel authUser={authUser} onSignOut={onSignOut} /></div><aside className="settings-connection"><span className="eyebrow">DATA & PRIVACY</span><h2>{authUser ? 'Your cloud account is active' : isCloudConfigured ? 'Supabase is configured' : 'Local learning mode'}</h2><p>{authUser ? 'Your progress is loading from your private account and new activity syncs as you learn.' : isCloudConfigured ? 'Sign in to sync your progress. Apply the included migration before using cloud records.' : 'Progress is only saved while you are signed in. Add Supabase keys and apply the database migration to enable accounts and cloud sync.'}</p><div className="connection-status"><span className={authUser ? 'connected-dot' : ''} />{authUser ? 'Signed in and syncing' : isCloudConfigured ? 'Sign in for private cloud sync' : 'No cloud credentials detected'}</div><div className="privacy-note"><LockKeyhole size={15} /><span>Never put a Supabase service-role key or AI provider key in browser environment variables.</span></div></aside></div></div>
 }
 
 export default App

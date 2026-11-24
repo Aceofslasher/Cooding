@@ -9,7 +9,7 @@ Loopwise is a small programming-learning workspace for students. It combines sho
 - A separate Lesson Studio for creating, importing, exporting, and removing custom JavaScript lessons. Custom lessons are stored in this browser and included in the learning path; export JSON to back them up or move them to another browser.
 - Monaco editing, JavaScript execution in a sandboxed browser frame, and restricted HTML/CSS previews.
 - A local tutor response mode that gives contextual hints without requiring an API key.
-- Local progress, lesson completion, exercise attempts, tutor messages, and preferences stored in the browser.
+- Sign-in-gated progress: lesson completion, exercise attempts, tutor messages, and preferences are saved only while signed in; signed-out activity stays in memory for that session.
 - Optional Supabase email sign-up/sign-in and cloud sync for profile settings, lesson progress, coding attempts, and quiz scores. Hosted AI and Python endpoints require Supabase token-verification settings and a student access token.
 - Optional Vercel endpoints for an OpenAI-compatible AI provider and server-side Python execution through Judge0.
 - Supabase schema, RLS policies, indexes, starter course content, exercises, and non-public test records.
@@ -28,9 +28,9 @@ npm install
 npm run dev
 ```
 
-Open the URL Vite prints, normally `http://localhost:5173`. Without credentials, lessons, JavaScript practice, progress tracking, and demo tutor replies work locally. Progress is kept in this browser's local storage.
+Open the URL Vite prints, normally `http://localhost:5173`. Without credentials, lessons, JavaScript practice, and demo tutor replies work locally. Progress is only saved while signed in; signed-out work is session-only and is cleared on reload or sign-out.
 
-Open **Lesson studio** in the sidebar to create a custom lesson or import a JSON lesson file. Use **Export JSON** to back up custom lessons. Custom lesson content and progress are local to the current browser and are not synced to Supabase.
+Open **Lesson studio** in the sidebar to create a custom lesson or import a JSON lesson file. Use **Export JSON** to back up custom lessons. Custom lesson content stays local to the current browser; its progress follows the same sign-in rule and is not synced to Supabase.
 
 Vite's development server does not run Vercel serverless functions. To exercise `/api/tutor` and `/api/execute` locally, install/use the Vercel CLI, set `VITE_ENABLE_SERVERLESS=true` in `.env.local`, and run `npx vercel dev` after linking the project. Without that setting, AI uses its labeled demo response and Python explains how to start the configured runner.
 
@@ -44,7 +44,7 @@ Vite's development server does not run Vercel serverless functions. To exercise 
 
 RLS is enabled on every table. Published learning content is readable to visitors; student records require an authenticated matching `auth.uid()`. Hidden test cases have no student-read policy unless `visible_to_student` is true. Never place the Supabase service-role key in the browser.
 
-Current cloud sync persists the profile, lesson status, coding-attempt records, and quiz scores. Tutor messages remain in browser storage in this version. The UI remains usable while signed out; only cloud persistence depends on authentication.
+Current cloud sync persists the profile, lesson status, coding-attempt records, and quiz scores. Tutor messages are saved only while signed in, with the browser snapshot. The UI remains usable while signed out, but progress is not persisted, and hosted AI endpoints require a signed-in session.
 
 ## Configure AI and Python
 
