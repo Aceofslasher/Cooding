@@ -22,18 +22,20 @@ function withoutSupabaseConfig() {
   for (const key of ['SUPABASE_URL', 'SUPABASE_ANON_KEY', 'VITE_SUPABASE_URL', 'VITE_SUPABASE_ANON_KEY']) delete process.env[key]
 }
 
-test('hosted tutor fails closed without Supabase token verification', async () => {
+test('hosted tutor reports missing server-side Supabase config', async () => {
   withoutSupabaseConfig()
   const response = createResponse()
   await tutorHandler({ method: 'POST', headers: {}, body: { question: 'Explain a variable' } }, response)
-  assert.equal(response.statusCode, 401)
+  assert.equal(response.statusCode, 503)
+  assert.match(response.body.error, /SUPABASE_URL/)
 })
 
-test('hosted Python execution fails closed without Supabase token verification', async () => {
+test('hosted Python execution reports missing server-side Supabase config', async () => {
   withoutSupabaseConfig()
   const response = createResponse()
   await executionHandler({ method: 'POST', headers: {}, body: { sourceCode: 'print(1)' } }, response)
-  assert.equal(response.statusCode, 401)
+  assert.equal(response.statusCode, 503)
+  assert.match(response.body.error, /SUPABASE_URL/)
 })
 
 test('provider endpoints reject methods other than POST', async () => {

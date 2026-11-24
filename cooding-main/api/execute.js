@@ -22,7 +22,12 @@ function decodeOutput(value) {
 export default async function handler(request, response) {
   if (request.method !== 'POST') return response.status(405).json({ error: 'Method not allowed' })
   const auth = await verifyConfiguredUser(request)
-  if (!auth.authorized) return response.status(401).json({ error: 'Sign in before using hosted code execution.' })
+  if (!auth.authorized) {
+    if (!auth.configured) return response.status(503).json({ error: 'Python execution is not configured: SUPABASE_URL and SUPABASE_ANON_KEY are missing from the server environment.' })
+    if (auth.reason === 'unreachable') return response.status(503).json({ error: 'The server could not reach Supabase to verify your session. Check SUPABASE_URL and the server connection.' })
+    if (auth.reason === 'rejected') return response.status(401).json({ error: 'Your session was not accepted by the server\'s Supabase project. Sign out, sign in again, and make sure the server SUPABASE_URL matches the app.' })
+    return response.status(401).json({ error: 'Sign in before using hosted code execution.' })
+  }
   if (isRateLimited(request)) return response.status(429).json({ error: 'Too many execution requests. Please wait and try again.' })
   if (!process.env.JUDGE0_URL || !process.env.JUDGE0_API_KEY) {
     return response.status(503).json({ error: 'Secure Python execution is not configured on this server.' })
