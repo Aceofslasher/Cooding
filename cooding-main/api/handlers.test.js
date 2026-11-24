@@ -88,6 +88,52 @@ test('hosted tutor reports provider status and a safe troubleshooting hint', asy
   }
 })
 
+test('hosted tutor falls back to the next model when Gemini reports overload', async () => {
+  const originalFetch = global.fetch
+  const originalEnv = {
+    SUPABASE_URL: process.env.SUPABASE_URL,
+    SUPABASE_ANON_KEY: process.env.SUPABASE_ANON_KEY,
+    AI_API_KEY: process.env.AI_API_KEY,
+    AI_BASE_URL: process.env.AI_BASE_URL,
+    AI_MODEL: process.env.AI_MODEL,
+    AI_FALLBACK_MODELS: process.env.AI_FALLBACK_MODELS,
+  }
+  process.env.SUPABASE_URL = 'https://example.supabase.co'
+  process.env.SUPABASE_ANON_KEY = 'test-anon-key'
+  process.env.AI_API_KEY = 'AQ.test-key'
+  process.env.AI_BASE_URL = 'https://generativelanguage.googleapis.com/v1beta/openai'
+  process.env.AI_MODEL = 'gemini-primary'
+  process.env.AI_FALLBACK_MODELS = 'gemini-backup'
+  const requested = []
+  global.fetch = async (url) => {
+    if (url.endsWith('/auth/v1/user')) return { ok: true, json: async () => ({ id: 'student' }) }
+    requested.push(url)
+    if (url.includes('/models/gemini-primary:')) {
+      return { ok: false, status: 503, text: async () => JSON.stringify({ error: { message: 'Model is at capacity' } }) }
+    }
+    return { ok: true, json: async () => ({ candidates: [{ content: { parts: [{ text: 'Fallback answer.' }] } }] }) }
+  }
+
+  try {
+    const response = createResponse()
+    await tutorHandler({
+      method: 'POST',
+      headers: { authorization: 'Bearer test-token' },
+      body: { question: 'Why does this run slowly?' },
+    }, response)
+    assert.equal(response.statusCode, 200)
+    assert.equal(response.body.reply, 'Fallback answer.')
+    assert.equal(requested.length, 2)
+    assert.match(requested[1], /gemini-backup:generateContent$/)
+  } finally {
+    global.fetch = originalFetch
+    for (const [key, value] of Object.entries(originalEnv)) {
+      if (value === undefined) delete process.env[key]
+      else process.env[key] = value
+    }
+  }
+})
+
 test('hosted tutor uses native Gemini auth for generativelanguage base URLs', async () => {
   const originalFetch = global.fetch
   const originalEnv = {

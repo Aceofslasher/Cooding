@@ -54,6 +54,7 @@ Set these as **server-side** environment variables in Vercel or in the local env
 - `AI_BASE_URL`: API base URL, defaulting to `https://api.openai.com/v1`. When it points at `generativelanguage.googleapis.com`, the tutor automatically uses Gemini's native endpoint with the `x-goog-api-key` header, which is required for newer AI Studio `AQ.` keys.
 - `AI_GEMINI_NATIVE`: set to `true` to force Gemini's native endpoint even when `AI_BASE_URL` is a custom proxy.
 - `AI_MODEL`: model name, defaulting to `gpt-4o-mini`.
+- `AI_FALLBACK_MODELS`: optional comma-separated models tried in order when the provider answers with an overload status (429/5xx) or times out. Gemini defaults to `gemini-flash-lite-latest,gemini-3.1-flash-lite`.
 - `JUDGE0_URL`: Judge0-compatible API base URL.
 - `SUPABASE_URL` and `SUPABASE_ANON_KEY`: server-side values used to validate access tokens before serverless requests. The browser also needs the matching `VITE_` values for sign-in.
 - `JUDGE0_API_KEY`: Judge0 server credential.

@@ -75,6 +75,43 @@ function geminiReply(data) {
   return parts.map((part) => (typeof part?.text === 'string' ? part.text : '')).join('').trim()
 }
 
+const RETRYABLE_STATUS = new Set([429, 500, 502, 503, 504])
+const DEFAULT_GEMINI_FALLBACKS = 'gemini-flash-lite-latest,gemini-3.1-flash-lite'
+
+function requestGemini(root, candidate, history, userContext, timeoutMs) {
+  return fetch(geminiEndpoint(root, candidate), {
+    method: 'POST',
+    headers: { 'x-goog-api-key': process.env.AI_API_KEY, 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      systemInstruction: { parts: [{ text: SYSTEM_PROMPT }] },
+      contents: [
+        ...history.map((message) => ({ role: message.role === 'assistant' ? 'model' : 'user', parts: [{ text: message.content }] })),
+        { role: 'user', parts: [{ text: userContext }] },
+      ],
+      generationConfig: { temperature: 0.4, maxOutputTokens: 700 },
+    }),
+    signal: AbortSignal.timeout(timeoutMs),
+  })
+}
+
+function requestCompatible(baseUrl, candidate, history, userContext, timeoutMs) {
+  return fetch(`${baseUrl}/chat/completions`, {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${process.env.AI_API_KEY}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      model: candidate,
+      temperature: 0.4,
+      max_tokens: 700,
+      messages: [
+        { role: 'system', content: SYSTEM_PROMPT },
+        ...history,
+        { role: 'user', content: userContext },
+      ],
+    }),
+    signal: AbortSignal.timeout(timeoutMs),
+  })
+}
+
 export default async function handler(request, response) {
   if (request.method !== 'POST') return response.status(405).json({ error: 'Method not allowed' })
   const auth = await verifyConfiguredUser(request)
@@ -116,42 +153,41 @@ export default async function handler(request, response) {
   const baseUrl = (process.env.AI_BASE_URL || 'https://api.openai.com/v1').replace(/\/$/, '')
   const model = process.env.AI_MODEL || 'gpt-4o-mini'
   const nativeRoot = geminiNativeRoot()
+  // Gemini overloads individual models with transient 503s; try the next candidate instead of failing.
+  const fallbackModels = (process.env.AI_FALLBACK_MODELS || (nativeRoot ? DEFAULT_GEMINI_FALLBACKS : ''))
+    .split(',')
+    .map((name) => name.trim())
+    .filter(Boolean)
+  const candidates = [...new Set([model, ...fallbackModels])]
 
   try {
-    const upstream = nativeRoot
-      ? await fetch(geminiEndpoint(nativeRoot, model), {
-        method: 'POST',
-        headers: { 'x-goog-api-key': process.env.AI_API_KEY, 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          systemInstruction: { parts: [{ text: SYSTEM_PROMPT }] },
-          contents: [
-            ...history.map((message) => ({ role: message.role === 'assistant' ? 'model' : 'user', parts: [{ text: message.content }] })),
-            { role: 'user', parts: [{ text: userContext }] },
-          ],
-          generationConfig: { temperature: 0.4, maxOutputTokens: 700 },
-        }),
-        signal: AbortSignal.timeout(20_000),
-      })
-      : await fetch(`${baseUrl}/chat/completions`, {
-        method: 'POST',
-        headers: { Authorization: `Bearer ${process.env.AI_API_KEY}`, 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          model,
-          temperature: 0.4,
-          max_tokens: 700,
-          messages: [
-            { role: 'system', content: SYSTEM_PROMPT },
-            ...history,
-            { role: 'user', content: userContext },
-          ],
-        }),
-        signal: AbortSignal.timeout(20_000),
-      })
-    if (!upstream.ok) {
-      const detail = await readProviderError(upstream)
-      return response.status(502).json({
-        error: `The AI provider returned HTTP ${upstream.status}.${detail ? ` ${detail}` : ''} ${providerErrorHint(upstream.status)}`,
-      })
+    let upstream = null
+    let detail = ''
+    let status = 0
+    const deadline = Date.now() + 25_000
+    for (const candidate of candidates) {
+      const remaining = deadline - Date.now()
+      if (remaining < 2_000) break
+      try {
+        upstream = nativeRoot
+          ? await requestGemini(nativeRoot, candidate, history, userContext, Math.min(12_000, remaining))
+          : await requestCompatible(baseUrl, candidate, history, userContext, Math.min(20_000, remaining))
+      } catch {
+        upstream = null
+        status = 0
+        detail = ''
+        continue
+      }
+      status = upstream.status
+      if (upstream.ok) break
+      detail = await readProviderError(upstream)
+      if (!RETRYABLE_STATUS.has(status)) break
+    }
+    if (!upstream || !upstream.ok) {
+      const message = status
+        ? `The AI provider returned HTTP ${status}.${detail ? ` ${detail}` : ''} ${providerErrorHint(status)}`
+        : 'The AI provider did not respond in time. Please try again in a moment.'
+      return response.status(502).json({ error: message })
     }
     const data = await upstream.json()
     const reply = nativeRoot ? geminiReply(data) : data.choices?.[0]?.message?.content
