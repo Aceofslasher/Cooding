@@ -18,6 +18,7 @@ import { readCustomLessons, saveCustomLessons } from './services/lessonLibrary'
 import { countCorrectedAttempts, matchesExpectedOutput } from './utils/progress'
 import { htmlToText } from './utils/html'
 import { deriveSkillLevel, skillLevelPlan } from './utils/skill'
+import { PLAYGROUND_AI_NOTE, playgroundFilePayload, resolvePlaygroundFile, splitAssistantReply } from './utils/playground'
 import { STREAK_GOAL, recordStreakCompletion, summarizeStreak } from './utils/streak'
 import './App.css'
 
@@ -104,7 +105,7 @@ function App() {
   const [toast, setToast] = useState('')
   const [authUser, setAuthUser] = useState(null)
   const [currentCode, setCurrentCode] = useState('')
-  const [tutorLanguage, setTutorLanguage] = useState('javascript')
+  const tutorLanguage = currentLesson?.language === 'html' ? 'html' : 'javascript'
   const localCustomIds = new Set(customLessons.map((lesson) => lesson.id))
   const builtInIds = new Set(lessons.map((lesson) => lesson.id))
   const communityLessons = sharedLessons.filter((lesson) => !localCustomIds.has(lesson.id) && !builtInIds.has(lesson.id))
@@ -316,7 +317,6 @@ function App() {
             <div className="breadcrumbs"><span>Workspace</span><ChevronRight size={14} /><strong>{activeTitle}</strong></div>
           </div>
           <div className="topbar-actions">
-            {page === 'tutor' && <label className="tutor-language-select"><span className="sr-only">Tutor language</span><select value={tutorLanguage} onChange={(event) => setTutorLanguage(event.target.value)}><option value="javascript">JavaScript</option><option value="python">Python</option><option value="html">HTML & CSS</option></select><ChevronDown size={13} /></label>}
             <span className={`storage-badge ${authUser ? 'storage-cloud' : ''}`}><span />{authUser ? 'Cloud sync active' : isCloudConfigured ? 'Sign in for cloud sync' : 'Saved on this device'}</span>
             <button className="icon-button theme-button" aria-label={darkMode ? 'Switch to light theme' : 'Switch to dark theme'} onClick={() => setDarkMode((value) => !value)}>{darkMode ? <Sparkles size={17} /> : <Moon size={17} />}</button>
             <button className="help-button" onClick={() => changePage('tutor')}><CircleHelp size={16} /><span>Help</span></button>
@@ -327,7 +327,7 @@ function App() {
         {page === 'learn' && <LearningPath progress={progress} lessons={allLessons} authUser={authUser} onOpenLesson={openLesson} />}
         {page === 'lesson-studio' && <LessonStudio lessons={customLessons} allLessons={allLessons} onAddLessons={addCustomLessons} onDeleteLesson={deleteCustomLesson} onOpenLesson={openLesson} />}
         {page === 'lesson' && <LessonWorkspace key={currentLesson.id} lesson={currentLesson} lessons={allLessons} progress={progressView} authUser={authUser} onCodeChange={setCurrentCode} onComplete={completeLesson} onRecordAttempt={recordAttempt} onRecordQuiz={recordQuiz} onBack={() => changePage('learn')} onPrevious={() => openLesson(allLessons[Math.max(0, allLessons.findIndex((lesson) => lesson.id === currentLesson.id) - 1)])} onNext={() => openLesson(allLessons[(allLessons.findIndex((lesson) => lesson.id === currentLesson.id) + 1) % allLessons.length])} />}
-        {page === 'playground' && <Playground onCodeChange={setCurrentCode} isSignedIn={Boolean(authUser)} />}
+        {page === 'playground' && <Playground onCodeChange={setCurrentCode} isSignedIn={Boolean(authUser)} skillLevel={progressView.skillLevel} />}
         {page === 'practice' && <Practice progress={progressView} authUser={authUser} onRecordAttempt={recordAttempt} />}
         {page === 'tutor' && <TutorPage progress={progressView} currentCode={currentCode} currentLesson={currentLesson} tutorLanguage={tutorLanguage} onMessagesChange={(messages) => setProgress((previous) => ({ ...previous, messages }))} />}
         {page === 'progress' && <ProgressPage progress={progressView} lessons={allLessons} />}
@@ -500,7 +500,13 @@ function QuizCheck({ lesson, onRecordQuiz }) {
   return <section className="quiz-panel"><div className="quiz-heading"><span className="quiz-icon"><ListChecks size={17} /></span><div><span className="eyebrow">QUICK KNOWLEDGE CHECK</span><h2>Pause and check your understanding</h2></div></div><p>{quiz.question}</p><div className="quiz-options">{quiz.choices.map((choice, index) => <label className={`quiz-option ${selected === index ? 'quiz-option-selected' : ''}`} key={choice}><input type="radio" name={`quiz-${lesson.id}`} checked={selected === index} onChange={() => { setSelected(index); setResult('') }} /><span>{choice}</span></label>)}</div><div className="quiz-footer"><span className={result.startsWith('Correct') ? 'quiz-result quiz-result-correct' : 'quiz-result'}>{result}</span><Button onClick={checkAnswer} disabled={selected === null}>Check answer<ArrowRight size={14} /></Button></div></section>
 }
 
-function Playground({ onCodeChange, isSignedIn }) {
+function PlaygroundMessage({ message, files, onApply }) {
+  if (message.role === 'user') return <div className="pg-msg pg-msg-user"><span className="pg-avatar">You</span><div className="pg-bubble">{message.content}</div></div>
+  const parts = splitAssistantReply(message.content)
+  return <div className="pg-msg"><span className="pg-avatar pg-avatar-ai"><Sparkles size={12} /></span><div className="pg-bubble">{message.mode === 'demo' && <span className="pg-mode">DEMO</span>}{message.mode === 'error' && <span className="pg-mode pg-mode-error">CONNECTION ERROR</span>}{parts.map((part, index) => part.type === 'text' ? (part.text.trim() ? <p key={index}>{part.text.trim()}</p> : null) : <div className="pg-code" key={index}><div className="pg-code-head"><span>{part.fileName || (part.language ? part.language.toUpperCase() : 'SNIPPET')}</span><button type="button" className="pg-apply" onClick={() => onApply(message.id, index, part)}>{message.applied?.includes(index) ? 'Applied' : resolvePlaygroundFile(part, files) ? `Apply to ${resolvePlaygroundFile(part, files).name}` : 'No matching file'}</button></div><pre>{part.code}</pre></div>)}</div></div>
+}
+
+function Playground({ onCodeChange, isSignedIn, skillLevel = 'Beginner' }) {
   const [files, setFiles] = useState(defaultPlaygroundFiles)
   const [activeName, setActiveName] = useState(defaultPlaygroundFiles[0].name)
   const [openTabs, setOpenTabs] = useState([defaultPlaygroundFiles[0].name])
@@ -508,12 +514,15 @@ function Playground({ onCodeChange, isSignedIn }) {
   const [output, setOutput] = useState('')
   const [runStatus, setRunStatus] = useState('idle')
   const [activeOutputTab, setActiveOutputTab] = useState('output')
-  const [feedback, setFeedback] = useState('')
+  const [chat, setChat] = useState([])
+  const [draft, setDraft] = useState('')
   const [busy, setBusy] = useState(false)
+  const chatEndRef = useRef(null)
 
   const activeFile = files.find((file) => file.name === activeName) || files[0]
 
   useEffect(() => { onCodeChange?.(activeFile.content) }, [activeFile, onCodeChange])
+  useEffect(() => { chatEndRef.current?.scrollIntoView({ behavior: 'smooth' }) }, [chat.length, busy])
 
   function openFile(name) {
     setActiveName(name)
@@ -535,7 +544,6 @@ function Playground({ onCodeChange, isSignedIn }) {
   }
 
   function runCode() {
-    setFeedback('')
     setActiveOutputTab('output')
     setOutput('')
     setRunStatus('running')
@@ -552,32 +560,57 @@ function Playground({ onCodeChange, isSignedIn }) {
     setActiveName(defaultPlaygroundFiles[0].name)
     setOpenTabs([defaultPlaygroundFiles[0].name])
     setOutput('')
-    setFeedback('')
     setRunStatus('idle')
   }
 
-  async function askPlaygroundTutor(kind) {
-    setActiveOutputTab('feedback')
+  function appendAssistant(content, mode = 'local') {
+    setChat((current) => [...current, { id: crypto.randomUUID(), role: 'assistant', content, mode }])
+  }
+
+  async function sendToTutor(text, errorText) {
+    const trimmed = text.trim()
+    setActiveOutputTab('chat')
     if (!isSignedIn) {
-      setFeedback('Sign in from Profile & settings to use AI hints and error explanations.')
+      appendAssistant('Sign in from Profile & settings to chat with the AI tutor and let it add code for you.')
       return
     }
-    if (kind === 'error' && runStatus !== 'error') {
-      setFeedback('Run your project first so the tutor has an actual error message to explain.')
-      return
-    }
+    if (!trimmed || busy) return
+    const userMessage = { id: crypto.randomUUID(), role: 'user', content: trimmed }
+    const nextChat = [...chat, userMessage]
+    setChat(nextChat)
+    setDraft('')
     setBusy(true)
-    setFeedback(kind === 'hint' ? 'Thinking through a hint...' : 'Reading the error and your code...')
     const result = await askTutor({
-      question: kind === 'hint' ? 'Please give me a hint, not the full solution.' : 'Explain what this error means and guide me toward a fix without rewriting my whole solution.',
-      code: activeFile.content,
-      error: kind === 'error' ? output : undefined,
+      question: `${PLAYGROUND_AI_NOTE}\n\nLearner request: ${trimmed}`,
+      code: playgroundFilePayload(files),
+      error: errorText,
       relatedLanguage: activeFile.language,
-      context: { title: activeFile.name, topic: 'Playground' },
-      skillLevel: 'Beginner',
+      context: { title: 'Playground', topic: 'Playground', objective: 'Build and refine the page in index.html, styles.css, and script.js' },
+      skillLevel,
+      history: nextChat.slice(-6).map((message) => ({ role: message.role, content: message.content })),
     })
-    setFeedback(`${result.mode === 'demo' ? 'Tutor demo · ' : ''}${result.reply}`)
     setBusy(false)
+    setChat((current) => [...current, { id: crypto.randomUUID(), role: 'assistant', content: result.reply, mode: result.mode }])
+  }
+
+  function askPlaygroundTutor(kind) {
+    if (kind === 'error' && runStatus !== 'error') {
+      setActiveOutputTab('chat')
+      appendAssistant('Run your project first so the tutor has an actual error message to explain.')
+      return
+    }
+    sendToTutor(
+      kind === 'hint' ? 'Please give me a hint about what to work on next. Do not rewrite my code yet.' : `Explain this error and, if the cause is clear, include the fixed file: ${output}`,
+      kind === 'error' ? output : undefined,
+    )
+  }
+
+  function applyBlock(messageId, index, block) {
+    const target = resolvePlaygroundFile(block, files)
+    if (!target) return
+    setFiles((current) => current.map((file) => file.name === target.name ? { ...file, content: block.code } : file))
+    openFile(target.name)
+    setChat((current) => current.map((message) => message.id === messageId ? { ...message, applied: [...(message.applied || []), index] } : message))
   }
 
   const fileIcon = (file) => file.language === 'html' ? <FileCode2 size={14} /> : file.language === 'css' ? <FileText size={14} /> : <Braces size={14} />
@@ -606,8 +639,19 @@ function Playground({ onCodeChange, isSignedIn }) {
         </div>
         <div className="monaco-wrap"><Editor height="380px" language={activeFile.language} theme="vs-dark" value={activeFile.content} onChange={updateCode} options={{ minimap: { enabled: false }, fontSize: 13, lineHeight: 22, padding: { top: 16, bottom: 12 }, scrollBeyondLastLine: false, wordWrap: 'on', automaticLayout: true, fontFamily: '"IBM Plex Mono", Consolas, monospace', lineNumbersMinChars: 3, renderLineHighlight: 'gutter', scrollbar: { verticalScrollbarSize: 7, horizontalScrollbarSize: 7 }, suggestOnTriggerCharacters: true }} /></div>
         <CodeRunner key={runId} code={buildPreviewDocument(files)} language="html" runId={runId} onComplete={receiveRun} />
-        <div className="output-panel"><div className="output-header"><div className="output-tabs"><button className={activeOutputTab === 'output' ? 'output-tab-active' : ''} onClick={() => setActiveOutputTab('output')}><Terminal size={14} />Output</button><button className={activeOutputTab === 'feedback' ? 'output-tab-active' : ''} onClick={() => setActiveOutputTab('feedback')}><Sparkles size={14} />Feedback</button></div><span className={`execution-status execution-${runStatus}`}>{runStatus === 'running' ? 'Running' : runStatus === 'success' ? 'Preview rendered' : runStatus === 'error' ? 'Error' : 'Ready'}</span></div>
-          {activeOutputTab === 'output' ? <pre className={`output-content ${runStatus === 'error' ? 'output-error' : ''}`}>{output || 'Run your code to preview the page and see its visible text.'}</pre> : <div className="feedback-content">{feedback || 'Ask for a hint when you get stuck. The tutor can see the file you are editing.'}</div>}
+        <div className="output-panel"><div className="output-header"><div className="output-tabs"><button className={activeOutputTab === 'output' ? 'output-tab-active' : ''} onClick={() => setActiveOutputTab('output')}><Terminal size={14} />Output</button><button className={activeOutputTab === 'chat' ? 'output-tab-active' : ''} onClick={() => setActiveOutputTab('chat')}><Sparkles size={14} />AI chat</button></div><span className={`execution-status execution-${runStatus}`}>{runStatus === 'running' ? 'Running' : runStatus === 'success' ? 'Preview rendered' : runStatus === 'error' ? 'Error' : 'Ready'}</span></div>
+          {activeOutputTab === 'output' ? <pre className={`output-content ${runStatus === 'error' ? 'output-error' : ''}`}>{output || 'Run your code to preview the page and see its visible text.'}</pre> : <div className="pg-chat">
+            <div className="pg-chat-log">
+              {!chat.length && <div className="pg-chat-empty"><strong>Ask the tutor to explain, debug, or write code.</strong><span>Try “Add a button that changes the heading color” or “Why is my paragraph not showing?”. Code changes arrive with an Apply button.</span><div className="pg-suggestions"><button type="button" onClick={() => sendToTutor('Add a contact form with a name, email, and submit button, and style it.')}>Add a form</button><button type="button" onClick={() => sendToTutor('Explain what script.js currently does in simple terms.')}>Explain my code</button></div></div>}
+              {chat.map((message) => <PlaygroundMessage key={message.id} message={message} files={files} onApply={applyBlock} />)}
+              {busy && <div className="pg-typing"><i /><i /><i /></div>}
+              <div ref={chatEndRef} />
+            </div>
+            <form className="pg-chat-form" onSubmit={(event) => { event.preventDefault(); sendToTutor(draft) }}>
+              <input value={draft} onChange={(event) => setDraft(event.target.value)} placeholder={isSignedIn ? 'Ask the tutor to add or explain code...' : 'Sign in to chat with the tutor'} disabled={!isSignedIn || busy} aria-label="Message the playground tutor" />
+              <Button variant="dark" type="submit" disabled={!isSignedIn || busy || !draft.trim()}><Send size={13} />Send</Button>
+            </form>
+          </div>}
         </div>
         <div className="editor-footer"><div className="editor-footer-left"><button className="editor-action" onClick={() => askPlaygroundTutor('hint')} disabled={busy}><Lightbulb size={15} />Get a hint</button><button className="editor-action" onClick={() => askPlaygroundTutor('error')} disabled={busy}><CircleHelp size={15} />Explain my error</button></div><div className="editor-footer-right"><span className="safe-runtime"><ShieldCheck size={14} />Runs in an isolated browser frame</span></div></div>
       </section>

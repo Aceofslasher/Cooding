@@ -7,7 +7,7 @@ Loopwise is a small programming-learning workspace for students. It combines sho
 - Responsive dashboard, learning path, lessons, practice, multi-file playground, tutor, progress, history, and tabbed settings pages.
 - Seventy-two built-in lessons: sixty JavaScript lessons (20 each for beginner, intermediate, and advanced) and twelve HTML lessons. Each lesson links to a relevant W3Schools reference. These are educational starter content, not student results.
 - A separate Lesson Studio for creating, importing, exporting, and removing custom JavaScript or HTML lessons. Custom lessons are stored in this browser; while signed in they are also published to the shared `custom_lessons` table so other accounts can open them from the learning path.
-- Monaco editing, a playground workspace with an HTML/CSS/JavaScript file explorer and tabs, JavaScript execution in a sandboxed browser frame, and restricted HTML/CSS previews.
+- Monaco editing, a playground workspace with an HTML/CSS/JavaScript file explorer and tabs, JavaScript execution in a sandboxed browser frame, and restricted HTML/CSS previews. The playground also has an AI chat tab: ask the tutor to explain or change code, and fenced file blocks in its reply get an Apply button that writes them into the matching file.
 - A local tutor response mode that gives contextual hints without requiring an API key.
 - Sign-in-gated progress: lesson completion, exercise attempts, tutor messages, and preferences are saved only while signed in; signed-out activity stays in memory for that session.
 - A daily streak in the sidebar: sign in and finish three different lessons in a day to extend it. Missing a day resets it.
@@ -75,7 +75,7 @@ npm run lint
 npm run build
 ```
 
-Tests cover progress summaries, output comparison, corrected attempts, secure endpoint defaults, streak counting, automatic skill-level thresholds, and the built-in curriculum. Browser QA verified the multi-file playground, HTML lessons and references, tabbed settings, custom HTML lessons, sandboxed JavaScript output and timeout, answer submission, quiz scoring, HTML/CSS previews, theme switching, and mobile layout. Manual follow-up is still needed for Supabase auth/RLS against a configured project, provider API failure cases, Python results from a configured Judge0 host, and hosted deployment.
+Tests cover progress summaries, output comparison, corrected attempts, secure endpoint defaults, streak counting, automatic skill-level thresholds, playground reply parsing, and the built-in curriculum. Browser QA verified the multi-file playground, HTML lessons and references, tabbed settings, custom HTML lessons, sandboxed JavaScript output and timeout, answer submission, quiz scoring, HTML/CSS previews, theme switching, and mobile layout. Manual follow-up is still needed for Supabase auth/RLS against a configured project, provider API failure cases, Python results from a configured Judge0 host, and hosted deployment.
 
 ## Deploy to Vercel
 
