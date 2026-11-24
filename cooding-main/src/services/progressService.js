@@ -61,14 +61,26 @@ const lessonIds = {
   'browser-storage': 'c6231034-0705-42ed-872a-bad7c0080a58',
   'fetch-api': 'c6231034-0705-42ed-872a-bad7c0080a59',
   performance: 'c6231034-0705-42ed-872a-bad7c0080a60',
+  'html-basics': 'c6231034-0705-42ed-872a-bad7c0080a61',
+  'html-elements': 'c6231034-0705-42ed-872a-bad7c0080a62',
+  'html-headings': 'c6231034-0705-42ed-872a-bad7c0080a63',
+  'html-paragraphs': 'c6231034-0705-42ed-872a-bad7c0080a64',
+  'html-links': 'c6231034-0705-42ed-872a-bad7c0080a65',
+  'html-images': 'c6231034-0705-42ed-872a-bad7c0080a66',
+  'html-lists': 'c6231034-0705-42ed-872a-bad7c0080a67',
+  'html-tables': 'c6231034-0705-42ed-872a-bad7c0080a68',
+  'html-forms': 'c6231034-0705-42ed-872a-bad7c0080a69',
+  'html-semantic': 'c6231034-0705-42ed-872a-bad7c0080a70',
+  'html-media': 'c6231034-0705-42ed-872a-bad7c0080a71',
+  'html-meta': 'c6231034-0705-42ed-872a-bad7c0080a72',
 }
 const lessonSlugs = Object.fromEntries(Object.entries(lessonIds).map(([slug, id]) => [id, slug]))
-const languageLabels = { javascript: 'JavaScript', python: 'Python', 'html & css': 'HTML & CSS' }
+const languageLabels = { javascript: 'JavaScript', python: 'Python', 'html & css': 'HTML & CSS', html: 'HTML' }
 
 export async function loadCloudProgress(userId) {
   if (!supabase) return null
   const [profileResult, lessonResult, attemptResult, quizResult] = await Promise.all([
-    supabase.from('profiles').select('display_name, skill_level, preferred_language').eq('id', userId).maybeSingle(),
+    supabase.from('profiles').select('*').eq('id', userId).maybeSingle(),
     supabase.from('lesson_progress').select('lesson_id, status').eq('user_id', userId),
     supabase.from('coding_attempts').select('id, exercise_title, topic, programming_language, execution_status, passed_tests, feedback, created_at').eq('user_id', userId).order('created_at', { ascending: false }).limit(100),
     supabase.from('quiz_attempts').select('id, lesson_id, score, total_questions, completed_at').eq('user_id', userId).order('completed_at', { ascending: false }).limit(100),
@@ -77,10 +89,14 @@ export async function loadCloudProgress(userId) {
     if (result.error) throw result.error
   }
   const lessonRows = lessonResult.data ?? []
+  const profile = profileResult.data ?? {}
   return {
-    displayName: profileResult.data?.display_name || 'Learner',
-    skillLevel: profileResult.data?.skill_level ? profileResult.data.skill_level[0].toUpperCase() + profileResult.data.skill_level.slice(1) : 'Beginner',
-    preferredLanguage: languageLabels[profileResult.data?.preferred_language?.toLowerCase()] || 'JavaScript',
+    displayName: profile.display_name || 'Learner',
+    firstName: profile.first_name || '',
+    lastName: profile.last_name || '',
+    country: profile.country || '',
+    skillLevel: profile.skill_level ? profile.skill_level[0].toUpperCase() + profile.skill_level.slice(1) : 'Beginner',
+    preferredLanguage: languageLabels[profile.preferred_language?.toLowerCase()] || 'JavaScript',
     lessonsStarted: lessonRows.map((row) => lessonSlugs[row.lesson_id] || row.lesson_id),
     lessonsCompleted: lessonRows.filter((row) => row.status === 'completed').map((row) => lessonSlugs[row.lesson_id] || row.lesson_id),
     attempts: (attemptResult.data ?? []).map((row) => ({
@@ -156,12 +172,20 @@ export async function saveCloudLessonProgress(userId, lessonId, status) {
 
 export async function saveCloudProfile(userId, profile) {
   if (!supabase) return
-  const { error } = await supabase.from('profiles').upsert({
+  const base = {
     id: userId,
     display_name: profile.displayName,
-    skill_level: profile.skillLevel.toLowerCase(),
-    preferred_language: profile.preferredLanguage.toLowerCase(),
-  })
+    skill_level: (profile.skillLevel || 'Beginner').toLowerCase(),
+    preferred_language: (profile.preferredLanguage || 'JavaScript').toLowerCase(),
+  }
+  const extended = {
+    ...base,
+    first_name: profile.firstName || '',
+    last_name: profile.lastName || '',
+    country: profile.country || '',
+  }
+  let { error } = await supabase.from('profiles').upsert(extended)
+  if (error) ({ error } = await supabase.from('profiles').upsert(base))
   if (error) throw error
 }
 

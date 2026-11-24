@@ -12,6 +12,7 @@ const requiredTextFields = [
   'hint',
 ]
 const levels = ['Beginner', 'Intermediate', 'Advanced']
+export const lessonLanguages = ['javascript', 'html']
 const maxTextLength = 5000
 const maxImportedLessons = 100
 
@@ -35,8 +36,9 @@ export function validateLesson(input) {
   if (!Number.isInteger(input.minutes) || input.minutes < 1 || input.minutes > 120) {
     throw new Error('Minutes must be a whole number from 1 to 120.')
   }
-  if (input.language !== 'javascript') {
-    throw new Error('Only JavaScript lessons are supported in Lesson Studio.')
+  const language = input.language || 'javascript'
+  if (!lessonLanguages.includes(language)) {
+    throw new Error('Language must be javascript or html.')
   }
 
   if (input.referenceUrl !== undefined && typeof input.referenceUrl !== 'string') {
@@ -66,7 +68,7 @@ export function validateLesson(input) {
     topic: input.topic.trim(),
     level: input.level,
     minutes: input.minutes,
-    language: 'javascript',
+    language,
     description: input.description.trim(),
     objective: input.objective.trim(),
     explanation: input.explanation.trim(),

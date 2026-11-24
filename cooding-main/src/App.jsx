@@ -2,19 +2,22 @@ import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import Editor from '@monaco-editor/react'
 import {
   Activity, ArrowDownRight, ArrowLeft, ArrowRight, ArrowUpRight, Award,
-  BookOpen, Braces, Check, CheckCircle2, ChevronDown, ChevronRight,
-  CircleHelp, Clock3, Code2, Flame, GraduationCap,
-  History, LayoutDashboard, Lightbulb, ListChecks, LockKeyhole,
+  Bell, BookOpen, Braces, Camera, Check, CheckCircle2, ChevronDown, ChevronRight,
+  CircleHelp, Clock3, Code2, Eye, EyeOff, FileCode2, FileText, Flame, FolderOpen, Globe, GraduationCap,
+  History, KeyRound, LayoutDashboard, Lightbulb, ListChecks, LockKeyhole,
   Menu, MessageCircle, Moon, Play, Plus, RotateCcw, Send, Settings,
-  ShieldCheck, Sparkles, Target, Terminal, X,
+  ShieldCheck, Sparkles, Target, Terminal, Trash2, Upload, UserRound, X,
 } from 'lucide-react'
 import { emptyProgress, lessonQuizzes, lessons, practiceExercises, readProgress } from './data/learningContent'
 import LessonStudio from './components/LessonStudio'
 import { askTutor } from './services/tutorService'
-import { getAuthHeaders, isCloudConfigured, supabase } from './services/supabase'
+import { isCloudConfigured, supabase } from './services/supabase'
 import { loadCloudProgress, saveCloudAttempt, saveCloudLessonProgress, saveCloudProfile, saveCloudQuizAttempt } from './services/progressService'
+import { deleteSharedCustomLesson, loadSharedCustomLessons, publishCustomLessons } from './services/customLessonService'
 import { readCustomLessons, saveCustomLessons } from './services/lessonLibrary'
 import { countCorrectedAttempts, matchesExpectedOutput } from './utils/progress'
+import { htmlToText } from './utils/html'
+import { STREAK_GOAL, recordStreakCompletion, summarizeStreak } from './utils/streak'
 import './App.css'
 
 const navigation = [
@@ -78,6 +81,11 @@ function Button({ children, variant = 'secondary', className = '', ...props }) {
   return <button className={`button button-${variant} ${className}`} {...props}>{children}</button>
 }
 
+function comparableOutput(value, language) {
+  if (language === 'html') return htmlToText(String(value ?? '')).replace(/\s+/g, ' ').trim()
+  return String(value ?? '').trim()
+}
+
 function App() {
   const [progress, setProgress] = useState(readProgress)
   const [customLessons, setCustomLessons] = useState(() => {
@@ -87,6 +95,7 @@ function App() {
       return []
     }
   })
+  const [sharedLessons, setSharedLessons] = useState([])
   const [page, setPage] = useState('dashboard')
   const [currentLesson, setCurrentLesson] = useState(lessons[0])
   const [mobileNavOpen, setMobileNavOpen] = useState(false)
@@ -95,7 +104,10 @@ function App() {
   const [authUser, setAuthUser] = useState(null)
   const [currentCode, setCurrentCode] = useState('')
   const [tutorLanguage, setTutorLanguage] = useState('javascript')
-  const allLessons = [...lessons, ...customLessons]
+  const localCustomIds = new Set(customLessons.map((lesson) => lesson.id))
+  const builtInIds = new Set(lessons.map((lesson) => lesson.id))
+  const communityLessons = sharedLessons.filter((lesson) => !localCustomIds.has(lesson.id) && !builtInIds.has(lesson.id))
+  const allLessons = [...lessons, ...customLessons, ...communityLessons]
 
   useEffect(() => {
     try {
@@ -148,6 +160,28 @@ function App() {
   }, [authUser, customLessons])
 
   useEffect(() => {
+    if (!authUser) {
+      setSharedLessons([])
+      return undefined
+    }
+    let active = true
+    loadSharedCustomLessons()
+      .then((rows) => { if (active) setSharedLessons(rows) })
+      .catch(() => {})
+    return () => { active = false }
+  }, [authUser])
+
+  useEffect(() => {
+    if (!authUser || !customLessons.length) return
+    const authorName = progress.displayName || authUser.email?.split('@')[0] || 'Learner'
+    publishCustomLessons(customLessons, authUser.id, authorName)
+      .then(() => loadSharedCustomLessons())
+      .then((rows) => setSharedLessons(rows))
+      .catch(() => setToast('Custom lessons saved locally; sharing them failed'))
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [authUser, customLessons])
+
+  useEffect(() => {
     document.documentElement.dataset.theme = darkMode ? 'dark' : 'light'
     localStorage.setItem('codementor-theme', darkMode ? 'dark' : 'light')
   }, [darkMode])
@@ -179,6 +213,9 @@ function App() {
   }
 
   function completeLesson(lesson) {
+    if (authUser) {
+      setProgress((previous) => ({ ...previous, streak: recordStreakCompletion(previous.streak, new Date(), lesson.id) }))
+    }
     setProgress((previous) => ({
       ...previous,
       lessonsCompleted: previous.lessonsCompleted.includes(lesson.id)
@@ -217,6 +254,8 @@ function App() {
     try {
       saveCustomLessons(updatedLessons)
       setCustomLessons(updatedLessons)
+      setSharedLessons((previous) => previous.filter((lesson) => lesson.id !== lessonId))
+      if (authUser) deleteSharedCustomLesson(lessonId).catch(() => {})
       setProgress((previous) => ({
         ...previous,
         lessonsStarted: previous.lessonsStarted.filter((id) => id !== lessonId),
@@ -241,11 +280,6 @@ function App() {
           <button className="icon-button sidebar-close" aria-label="Close menu" onClick={() => setMobileNavOpen(false)}><X size={18} /></button>
         </div>
 
-        <button className="course-switcher" onClick={() => changePage('learn')} aria-label="Open JavaScript foundations learning path">
-          <div className="course-language"><span className="language-dot" />JavaScript foundations</div>
-          <ChevronDown size={15} />
-        </button>
-
         <nav className="side-nav" aria-label="Main navigation">
           {navigation.map((group) => (
             <div className="nav-group" key={group.section}>
@@ -261,11 +295,11 @@ function App() {
         </nav>
 
         <div className="sidebar-bottom">
-          <div className="streak-mini"><div className="streak-icon"><Flame size={16} /></div><div><strong>{progress.attempts.length ? 'Keep it going' : 'Your first session'}</strong><span>{authUser ? 'Progress is saved to your account' : 'Sign in to save your progress'}</span></div></div>
+          <StreakCard progress={progress} authUser={authUser} onOpenSettings={() => changePage('settings')} />
           <button className={`nav-link ${page === 'settings' ? 'nav-link-active' : ''}`} onClick={() => changePage('settings')}><Settings size={17} /><span>Profile & settings</span></button>
           {authUser && <button className="nav-link signout-link" onClick={() => supabase.auth.signOut().then(() => setToast('Signed out. Progress is only saved while signed in.'))}><LockKeyhole size={16} /><span>Sign out</span></button>}
           <button className="profile-row" onClick={() => changePage('settings')}>
-            <span className="avatar">{(progress.displayName || 'L').slice(0, 1).toUpperCase()}</span>
+            <span className="avatar">{progress.avatar ? <img src={progress.avatar} alt="" /> : (progress.displayName || 'L').slice(0, 1).toUpperCase()}</span>
             <span className="profile-copy"><strong>{progress.displayName || 'Learner'}</strong><small>{progress.skillLevel} learner</small></span>
             <ChevronDown size={15} />
           </button>
@@ -287,15 +321,15 @@ function App() {
         </header>
 
         {page === 'dashboard' && <Dashboard progress={progress} lessons={allLessons} onOpenLesson={openLesson} onNavigate={changePage} />}
-        {page === 'learn' && <LearningPath progress={progress} lessons={allLessons} onOpenLesson={openLesson} />}
+        {page === 'learn' && <LearningPath progress={progress} lessons={allLessons} authUser={authUser} onOpenLesson={openLesson} />}
         {page === 'lesson-studio' && <LessonStudio lessons={customLessons} allLessons={allLessons} onAddLessons={addCustomLessons} onDeleteLesson={deleteCustomLesson} onOpenLesson={openLesson} />}
         {page === 'lesson' && <LessonWorkspace key={currentLesson.id} lesson={currentLesson} lessons={allLessons} progress={progress} authUser={authUser} onCodeChange={setCurrentCode} onComplete={completeLesson} onRecordAttempt={recordAttempt} onRecordQuiz={recordQuiz} onBack={() => changePage('learn')} onPrevious={() => openLesson(allLessons[Math.max(0, allLessons.findIndex((lesson) => lesson.id === currentLesson.id) - 1)])} onNext={() => openLesson(allLessons[(allLessons.findIndex((lesson) => lesson.id === currentLesson.id) + 1) % allLessons.length])} />}
-        {page === 'playground' && <Playground onCodeChange={setCurrentCode} onRecordAttempt={recordAttempt} isSignedIn={Boolean(authUser)} />}
+        {page === 'playground' && <Playground onCodeChange={setCurrentCode} isSignedIn={Boolean(authUser)} />}
         {page === 'practice' && <Practice progress={progress} onOpenLesson={openLesson} />}
         {page === 'tutor' && <TutorPage progress={progress} currentCode={currentCode} currentLesson={currentLesson} tutorLanguage={tutorLanguage} onMessagesChange={(messages) => setProgress((previous) => ({ ...previous, messages }))} />}
         {page === 'progress' && <ProgressPage progress={progress} lessons={allLessons} />}
         {page === 'history' && <HistoryPage progress={progress} />}
-        {page === 'settings' && <SettingsPage progress={progress} authUser={authUser} onSignOut={() => supabase?.auth.signOut()} onSave={(updates) => { setProgress((previous) => ({ ...previous, ...updates })); if (authUser) saveCloudProfile(authUser.id, updates).catch(() => setToast('Preferences saved locally, but cloud sync failed')); setToast('Profile preferences saved') }} />}
+        {page === 'settings' && <SettingsPage progress={progress} authUser={authUser} onSignOut={() => supabase?.auth.signOut()} onSave={(updates) => { setProgress((previous) => ({ ...previous, ...updates })); if (authUser) saveCloudProfile(authUser.id, updates).catch(() => setToast('Profile saved locally, but cloud sync failed')); setToast('Profile preferences saved') }} />}
       </main>
       {toast && <div className="toast"><CheckCircle2 size={17} />{toast}</div>}
     </div>
@@ -354,43 +388,91 @@ function Metric({ label, value, icon: Icon, detail, compact = false }) {
   return <div className="metric"><div className="metric-top"><span>{label}</span><Icon size={16} /></div><strong className={compact ? 'metric-compact-value' : ''}>{value}</strong><small>{detail}</small></div>
 }
 
-function LearningPath({ progress, lessons, onOpenLesson }) {
+function StreakCard({ progress, authUser, onOpenSettings }) {
+  const streak = summarizeStreak(progress.streak)
+  const broken = Boolean(progress.streak?.lastDay) && !streak.count
+  const label = `${streak.count} day${streak.count === 1 ? '' : 's'} streak`
+  let detail
+  if (!authUser) detail = 'Sign in and finish 3 lessons a day to keep your streak.'
+  else if (streak.goalMetToday) detail = "Today's goal is done. Come back tomorrow to keep it alive."
+  else if (broken) detail = 'Your streak broke. Finish 3 lessons today to start again.'
+  else detail = `${streak.todayCount} of ${STREAK_GOAL} lessons today · ${streak.remaining} more to keep it going`
+  return <div className={`streak-card ${broken ? 'streak-card-broken' : ''}`}>
+    <div className="streak-card-head"><span className="streak-flame"><Flame size={17} /></span><div><strong>{label}</strong><span>{authUser ? 'Daily goal · 3 lessons' : 'Not signed in'}</span></div></div>
+    <div className="streak-dots" aria-hidden="true">{[0, 1, 2].map((index) => <i key={index} className={index < streak.todayCount ? 'streak-dot-done' : ''} />)}</div>
+    <p>{detail}</p>
+    {!authUser && <button className="streak-signin" onClick={onOpenSettings}>Sign in to start</button>}
+  </div>
+}
+
+const courseCatalog = [
+  {
+    id: 'javascript',
+    name: 'JavaScript',
+    title: 'JavaScript, from the ground up',
+    description: 'Learn to read, write, and reason about code through short explanations and hands-on practice.',
+    icon: Braces,
+  },
+  {
+    id: 'html',
+    name: 'HTML',
+    title: 'HTML, from the ground up',
+    description: 'Build real pages with headings, links, lists, forms, and semantic structure. Every lesson links to W3Schools.',
+    icon: FileCode2,
+  },
+]
+
+function LearningPath({ progress, lessons, authUser, onOpenLesson }) {
   const [language, setLanguage] = useState('All languages')
   const [level, setLevel] = useState('All levels')
-  const builtInCount = lessons.filter((lesson) => !lesson.isCustom).length
-  const customCount = lessons.length - builtInCount
-  const matchesFilters = (lesson) => (language === 'All languages' || lesson.language === language.toLowerCase()) && (level === 'All levels' || lesson.level === level)
-  const levelGroups = ['Beginner', 'Intermediate', 'Advanced']
-    .filter((lessonLevel) => level === 'All levels' || lessonLevel === level)
-    .map((lessonLevel) => ({
-      level: lessonLevel,
-      lessons: lessons.filter((lesson) => !lesson.isCustom && lesson.level === lessonLevel && matchesFilters(lesson)),
-    }))
-    .filter((group) => group.lessons.length)
-  const customLessons = lessons.filter((lesson) => lesson.isCustom && matchesFilters(lesson))
-  const visibleCount = levelGroups.reduce((total, group) => total + group.lessons.length, customLessons.length)
+  const builtInLessons = lessons.filter((lesson) => !lesson.isCustom)
+  const myCustomLessons = lessons.filter((lesson) => lesson.isCustom && !lesson.ownerId)
+  const sharedLessons = lessons.filter((lesson) => lesson.isCustom && lesson.ownerId)
+  const matchesFilters = (lesson) => (language === 'Custom lessons' || language === 'All languages' || lesson.language === language.toLowerCase()) && (level === 'All levels' || lesson.level === level)
+  const customOnly = language === 'Custom lessons'
+  const visibleCourses = customOnly ? [] : courseCatalog.filter((course) => language === 'All languages' || language.toLowerCase() === course.id)
+  const courses = visibleCourses.map((course) => {
+    const courseLessons = builtInLessons.filter((lesson) => lesson.language === course.id)
+    const groups = ['Beginner', 'Intermediate', 'Advanced']
+      .filter((lessonLevel) => level === 'All levels' || lessonLevel === level)
+      .map((lessonLevel) => ({ level: lessonLevel, lessons: courseLessons.filter((lesson) => lesson.level === lessonLevel && matchesFilters(lesson)) }))
+      .filter((group) => group.lessons.length)
+    return { ...course, lessons: courseLessons, completed: courseLessons.filter((lesson) => progress.lessonsCompleted.includes(lesson.id)).length, groups }
+  })
+  const visibleCustom = myCustomLessons.filter(matchesFilters)
+  const visibleShared = sharedLessons.filter(matchesFilters)
+  const visibleCount = courses.reduce((total, course) => total + course.lessons.filter(matchesFilters).length, 0) + visibleCustom.length + visibleShared.length
+  const totalBuiltIn = builtInLessons.length
   return <div className="page-content">
-    <PageIntro eyebrow="THE CURRICULUM" title="Learning path" description="Three levels, 20 built-in JavaScript lessons per level, with your custom lessons listed separately." action={<div className="learning-count"><BookOpen size={15} />{progress.lessonsCompleted.length} / {lessons.length} complete</div>} />
-    <div className="filter-row"><div className="filter-caption">COURSE <span>JavaScript learning path</span></div><div className="filter-controls"><label className="select-wrap"><span className="sr-only">Programming language</span><select value={language} onChange={(event) => setLanguage(event.target.value)}><option>All languages</option><option value="javascript">JavaScript</option></select><ChevronDown size={14} /></label><label className="select-wrap"><span className="sr-only">Difficulty</span><select value={level} onChange={(event) => setLevel(event.target.value)}><option>All levels</option><option>Beginner</option><option>Intermediate</option><option>Advanced</option></select><ChevronDown size={14} /></label></div></div>
-    <section className="course-overview"><div className="course-symbol"><Braces size={22} /></div><div className="course-summary"><div><span className="course-label">{builtInCount} BUILT-IN · {customCount} CUSTOM</span><h2>JavaScript, from the ground up</h2><p>Learn to read, write, and reason about code through short explanations and hands-on practice.</p></div><div className="course-progress-wrap"><div className="course-progress-label"><span>Your progress</span><strong>{progress.lessonsCompleted.length}/{lessons.length}</strong></div><div className="progress-track"><span style={{ width: `${(progress.lessonsCompleted.length / lessons.length) * 100}%` }} /></div></div></div></section>
-    {levelGroups.map((group) => <section key={group.level} className="lesson-level-group"><div className="lesson-list-heading"><h2>{group.level}</h2><span>{group.lessons.length} lessons</span></div><LessonRows lessons={group.lessons} progress={progress} onOpenLesson={onOpenLesson} /></section>)}
-    {customLessons.length > 0 && <section className="lesson-level-group custom-lesson-group"><div className="lesson-list-heading"><h2>Your custom lessons</h2><span>{customLessons.length} lessons</span></div><LessonRows lessons={customLessons} progress={progress} onOpenLesson={onOpenLesson} /></section>}
+    <PageIntro eyebrow="THE CURRICULUM" title="Learning path" description={`${totalBuiltIn} built-in lessons across JavaScript and HTML, plus your own custom and shared lessons.`} action={<div className="learning-count"><BookOpen size={15} />{progress.lessonsCompleted.length} / {lessons.length} complete</div>} />
+    <div className="filter-row"><div className="filter-caption">COURSE <span>All learning paths</span></div><div className="filter-controls"><label className="select-wrap"><span className="sr-only">Programming language</span><select value={language} onChange={(event) => setLanguage(event.target.value)}><option>All languages</option><option value="javascript">JavaScript</option><option value="html">HTML</option><option>Custom lessons</option></select><ChevronDown size={14} /></label><label className="select-wrap"><span className="sr-only">Difficulty</span><select value={level} onChange={(event) => setLevel(event.target.value)}><option>All levels</option><option>Beginner</option><option>Intermediate</option><option>Advanced</option></select><ChevronDown size={14} /></label></div></div>
+    {courses.map((course) => {
+      const CourseIcon = course.icon
+      const percent = course.lessons.length ? Math.round((course.completed / course.lessons.length) * 100) : 0
+      return <div className="course-block" key={course.id}>
+        <section className="course-overview"><div className="course-symbol"><CourseIcon size={22} /></div><div className="course-summary"><div><span className="course-label">{course.lessons.length} BUILT-IN LESSONS · {course.name.toUpperCase()}</span><h2>{course.title}</h2><p>{course.description}</p></div><div className="course-progress-wrap"><div className="course-progress-label"><span>Your progress</span><strong>{course.completed}/{course.lessons.length}</strong></div><div className="progress-track"><span style={{ width: `${percent}%` }} /></div></div></div></section>
+        {course.groups.map((group) => <section key={`${course.id}-${group.level}`} className="lesson-level-group"><div className="lesson-list-heading"><h2>{group.level}</h2><span>{group.lessons.length} lessons</span></div><LessonRows lessons={group.lessons} progress={progress} onOpenLesson={onOpenLesson} /></section>)}
+      </div>
+    })}
+    {visibleCustom.length > 0 && <section className="lesson-level-group custom-lesson-group"><div className="lesson-list-heading"><h2>Your custom lessons</h2><span>{visibleCustom.length} lessons</span></div><LessonRows lessons={visibleCustom} progress={progress} onOpenLesson={onOpenLesson} /></section>}
+    {visibleShared.length > 0 && <section className="lesson-level-group custom-lesson-group"><div className="lesson-list-heading"><h2>Shared custom lessons</h2><span>{visibleShared.length} lessons</span></div><LessonRows lessons={visibleShared} progress={progress} onOpenLesson={onOpenLesson} showAuthor authUserId={authUser?.id} /></section>}
     {!visibleCount && <div className="empty-state"><BookOpen size={22} /><strong>No lessons match these filters</strong><span>Try another level or language.</span></div>}
   </div>
 }
 
-function LessonRows({ lessons, progress, onOpenLesson }) {
+function LessonRows({ lessons, progress, onOpenLesson, showAuthor = false, authUserId }) {
   return <div className="lesson-list">{lessons.map((lesson, index) => {
     const done = progress.lessonsCompleted.includes(lesson.id)
     const started = progress.lessonsStarted?.includes(lesson.id)
-    return <button key={lesson.id} className="lesson-row" onClick={() => onOpenLesson(lesson)}><span className={`lesson-index ${done ? 'lesson-index-done' : ''}`}>{done ? <Check size={16} /> : String(index + 1).padStart(2, '0')}</span><span className="lesson-row-copy"><span className="lesson-row-meta"><span>{lesson.topic}</span><i />{lesson.level}</span><strong>{lesson.title}</strong><small>{lesson.description}</small></span><span className="lesson-row-time"><Clock3 size={14} />{lesson.minutes} min</span><span className={`lesson-row-status ${done ? 'status-complete' : ''}`}>{done ? 'Completed' : started ? 'In progress' : 'Start'}<ArrowRight size={15} /></span></button>
+    const authorLabel = showAuthor ? (lesson.ownerId && lesson.ownerId === authUserId ? 'Shared by you' : `Shared by ${lesson.author || 'a learner'}`) : ''
+    return <button key={lesson.id} className="lesson-row" onClick={() => onOpenLesson(lesson)}><span className={`lesson-index ${done ? 'lesson-index-done' : ''}`}>{done ? <Check size={16} /> : String(index + 1).padStart(2, '0')}</span><span className="lesson-row-copy"><span className="lesson-row-meta"><span>{lesson.topic}</span><i />{lesson.level}{authorLabel && <><i />{authorLabel}</>}</span><strong>{lesson.title}</strong><small>{lesson.description}</small></span><span className="lesson-row-time"><Clock3 size={14} />{lesson.minutes} min</span><span className={`lesson-row-status ${done ? 'status-complete' : ''}`}>{done ? 'Completed' : started ? 'In progress' : 'Start'}<ArrowRight size={15} /></span></button>
   })}</div>
 }
 
 function LessonWorkspace({ lesson, lessons, progress, authUser, onCodeChange, onComplete, onRecordAttempt, onRecordQuiz, onBack, onPrevious, onNext }) {
   const [showExample, setShowExample] = useState(false)
   const complete = progress.lessonsCompleted.includes(lesson.id)
-  const referenceUrl = lesson.referenceUrl || 'https://www.w3schools.com/js/'
+  const referenceUrl = lesson.referenceUrl || (lesson.language === 'html' ? 'https://www.w3schools.com/html/' : 'https://www.w3schools.com/js/')
   return <div className="page-content workspace-page">
     <button className="back-link" onClick={onBack}><ArrowLeft size={15} />Back to learning path</button>
     <div className="workspace-heading"><div><div className="lesson-row-meta"><span>{lesson.topic}</span><i />{lesson.level}<i /><Clock3 size={13} />{lesson.minutes} min</div><h1>{lesson.title}</h1><p>{lesson.description}</p></div><span className={`lesson-state ${complete ? 'lesson-state-done' : ''}`}>{complete ? <CheckCircle2 size={15} /> : <BookOpen size={15} />}{complete ? 'Completed' : 'In progress'}</span></div>
@@ -415,13 +497,183 @@ function QuizCheck({ lesson, onRecordQuiz }) {
   return <section className="quiz-panel"><div className="quiz-heading"><span className="quiz-icon"><ListChecks size={17} /></span><div><span className="eyebrow">QUICK KNOWLEDGE CHECK</span><h2>Pause and check your understanding</h2></div></div><p>{quiz.question}</p><div className="quiz-options">{quiz.choices.map((choice, index) => <label className={`quiz-option ${selected === index ? 'quiz-option-selected' : ''}`} key={choice}><input type="radio" name={`quiz-${lesson.id}`} checked={selected === index} onChange={() => { setSelected(index); setResult('') }} /><span>{choice}</span></label>)}</div><div className="quiz-footer"><span className={result.startsWith('Correct') ? 'quiz-result quiz-result-correct' : 'quiz-result'}>{result}</span><Button onClick={checkAnswer} disabled={selected === null}>Check answer<ArrowRight size={14} /></Button></div></section>
 }
 
-function Playground({ onCodeChange, onRecordAttempt, isSignedIn }) {
-  return <div className="page-content workspace-page"><PageIntro eyebrow="A SPACE TO EXPERIMENT" title="Playground" description="Try an idea, inspect what happens, and follow your curiosity." /><EditorWorkspace starterCode={'const greeting = "Hello, world!";\nconsole.log(greeting);'} language="javascript" title="Untitled program" topic="Playground" onCodeChange={onCodeChange} onRecordAttempt={onRecordAttempt} isSignedIn={isSignedIn} isPlayground /></div>
+function Playground({ onCodeChange, isSignedIn }) {
+  const [files, setFiles] = useState(defaultPlaygroundFiles)
+  const [activeName, setActiveName] = useState(defaultPlaygroundFiles[0].name)
+  const [openTabs, setOpenTabs] = useState([defaultPlaygroundFiles[0].name])
+  const [runId, setRunId] = useState(0)
+  const [output, setOutput] = useState('')
+  const [runStatus, setRunStatus] = useState('idle')
+  const [activeOutputTab, setActiveOutputTab] = useState('output')
+  const [feedback, setFeedback] = useState('')
+  const [busy, setBusy] = useState(false)
+
+  const activeFile = files.find((file) => file.name === activeName) || files[0]
+
+  useEffect(() => { onCodeChange?.(activeFile.content) }, [activeFile, onCodeChange])
+
+  function openFile(name) {
+    setActiveName(name)
+    setOpenTabs((tabs) => tabs.includes(name) ? tabs : [...tabs, name])
+  }
+
+  function closeTab(name) {
+    setOpenTabs((tabs) => {
+      if (tabs.length === 1) return tabs
+      const nextTabs = tabs.filter((tab) => tab !== name)
+      if (name === activeName) setActiveName(nextTabs[nextTabs.length - 1])
+      return nextTabs
+    })
+  }
+
+  function updateCode(value) {
+    const nextCode = value ?? ''
+    setFiles((current) => current.map((file) => file.name === activeName ? { ...file, content: nextCode } : file))
+  }
+
+  function runCode() {
+    setFeedback('')
+    setActiveOutputTab('output')
+    setOutput('')
+    setRunStatus('running')
+    setRunId((value) => value + 1)
+  }
+
+  function receiveRun(result) {
+    setOutput([result.error, result.output].filter((value) => typeof value === 'string' && value.trim()).join('\n') || '(No output yet)')
+    setRunStatus(result.error ? 'error' : 'success')
+  }
+
+  function resetProject() {
+    setFiles(defaultPlaygroundFiles)
+    setActiveName(defaultPlaygroundFiles[0].name)
+    setOpenTabs([defaultPlaygroundFiles[0].name])
+    setOutput('')
+    setFeedback('')
+    setRunStatus('idle')
+  }
+
+  async function askPlaygroundTutor(kind) {
+    setActiveOutputTab('feedback')
+    if (!isSignedIn) {
+      setFeedback('Sign in from Profile & settings to use AI hints and error explanations.')
+      return
+    }
+    if (kind === 'error' && runStatus !== 'error') {
+      setFeedback('Run your project first so the tutor has an actual error message to explain.')
+      return
+    }
+    setBusy(true)
+    setFeedback(kind === 'hint' ? 'Thinking through a hint...' : 'Reading the error and your code...')
+    const result = await askTutor({
+      question: kind === 'hint' ? 'Please give me a hint, not the full solution.' : 'Explain what this error means and guide me toward a fix without rewriting my whole solution.',
+      code: activeFile.content,
+      error: kind === 'error' ? output : undefined,
+      relatedLanguage: activeFile.language,
+      context: { title: activeFile.name, topic: 'Playground' },
+      skillLevel: 'Beginner',
+    })
+    setFeedback(`${result.mode === 'demo' ? 'Tutor demo · ' : ''}${result.reply}`)
+    setBusy(false)
+  }
+
+  const fileIcon = (file) => file.language === 'html' ? <FileCode2 size={14} /> : file.language === 'css' ? <FileText size={14} /> : <Braces size={14} />
+  const activeIcon = activeFile.language === 'html' ? 'HTML' : activeFile.language === 'css' ? 'CSS' : 'JS'
+
+  return <div className="page-content workspace-page">
+    <PageIntro eyebrow="A SPACE TO EXPERIMENT" title="Playground" description="A small multi-file workspace: edit HTML, CSS, and JavaScript, then run the page." />
+    <div className="playground-workbench">
+      <aside className="file-explorer">
+        <div className="explorer-head"><span>EXPLORER</span><button className="icon-button" aria-label="Reset project" title="Reset project" onClick={resetProject}><RotateCcw size={14} /></button></div>
+        <div className="explorer-folder"><FolderOpen size={14} /><span>src</span></div>
+        <div className="explorer-files">{files.map((file) => (
+          <button key={file.name} className={`explorer-file ${file.name === activeName ? 'explorer-file-active' : ''}`} onClick={() => openFile(file.name)}>
+            {fileIcon(file)}<span>{file.name}</span>
+          </button>
+        ))}</div>
+        <div className="explorer-foot"><span>{files.length} files</span><span>Saved in this browser</span></div>
+      </aside>
+      <section className="editor-workspace editor-workspace-wide">
+        <div className="editor-toolbar">
+          <div className="editor-tabs">{openTabs.map((name) => {
+            const file = files.find((item) => item.name === name)
+            return <div key={name} className={`editor-tab ${name === activeName ? 'editor-tab-active' : ''}`}><button type="button" onClick={() => setActiveName(name)}>{fileIcon(file)}<span>{name}</span></button>{openTabs.length > 1 && <button type="button" className="editor-tab-close" aria-label={`Close ${name}`} onClick={() => closeTab(name)}><X size={12} /></button>}</div>
+          })}</div>
+          <div className="editor-controls"><span className="editor-language">{activeIcon}</span><Button variant="run" onClick={runCode} disabled={runStatus === 'running'}><Play size={14} fill="currentColor" />Run Code</Button></div>
+        </div>
+        <div className="monaco-wrap"><Editor height="380px" language={activeFile.language} theme="vs-dark" value={activeFile.content} onChange={updateCode} options={{ minimap: { enabled: false }, fontSize: 13, lineHeight: 22, padding: { top: 16, bottom: 12 }, scrollBeyondLastLine: false, wordWrap: 'on', automaticLayout: true, fontFamily: '"IBM Plex Mono", Consolas, monospace', lineNumbersMinChars: 3, renderLineHighlight: 'gutter', scrollbar: { verticalScrollbarSize: 7, horizontalScrollbarSize: 7 }, suggestOnTriggerCharacters: true }} /></div>
+        <CodeRunner key={runId} code={buildPreviewDocument(files)} language="html" runId={runId} onComplete={receiveRun} />
+        <div className="output-panel"><div className="output-header"><div className="output-tabs"><button className={activeOutputTab === 'output' ? 'output-tab-active' : ''} onClick={() => setActiveOutputTab('output')}><Terminal size={14} />Output</button><button className={activeOutputTab === 'feedback' ? 'output-tab-active' : ''} onClick={() => setActiveOutputTab('feedback')}><Sparkles size={14} />Feedback</button></div><span className={`execution-status execution-${runStatus}`}>{runStatus === 'running' ? 'Running' : runStatus === 'success' ? 'Preview rendered' : runStatus === 'error' ? 'Error' : 'Ready'}</span></div>
+          {activeOutputTab === 'output' ? <pre className={`output-content ${runStatus === 'error' ? 'output-error' : ''}`}>{output || 'Run your code to preview the page and see its visible text.'}</pre> : <div className="feedback-content">{feedback || 'Ask for a hint when you get stuck. The tutor can see the file you are editing.'}</div>}
+        </div>
+        <div className="editor-footer"><div className="editor-footer-left"><button className="editor-action" onClick={() => askPlaygroundTutor('hint')} disabled={busy}><Lightbulb size={15} />Get a hint</button><button className="editor-action" onClick={() => askPlaygroundTutor('error')} disabled={busy}><CircleHelp size={15} />Explain my error</button></div><div className="editor-footer-right"><span className="safe-runtime"><ShieldCheck size={14} />Runs in an isolated browser frame</span></div></div>
+      </section>
+    </div>
+  </div>
 }
 
-function EditorWorkspace({ starterCode, language, expectedOutput, title, topic, onCodeChange, onRecordAttempt, hint, context, lessons = [], onComplete, onPrevious, onNext, isPlayground = false, isSignedIn = false }) {
+const defaultPlaygroundFiles = [
+  {
+    name: 'index.html',
+    language: 'html',
+    content: `<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Loopwise playground</title>
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <main>
+      <h1>Hello, world!</h1>
+      <p id="output"></p>
+    </main>
+    <script src="script.js"></script>
+  </body>
+</html>`,
+  },
+  {
+    name: 'styles.css',
+    language: 'css',
+    content: `body {
+  margin: 0;
+  font-family: system-ui, sans-serif;
+  background: #f4f8f5;
+  color: #17221e;
+  display: grid;
+  place-items: center;
+  min-height: 100vh;
+}
+
+h1 {
+  color: #2f785e;
+}`,
+  },
+  {
+    name: 'script.js',
+    language: 'javascript',
+    content: `const output = document.getElementById('output');
+if (output) {
+  output.textContent = 'Built with HTML, CSS, and JavaScript.';
+}`,
+  },
+]
+
+function buildPreviewDocument(files) {
+  const htmlFile = files.find((file) => file.language === 'html')
+  const css = files.filter((file) => file.language === 'css').map((file) => file.content).join('\n').replace(/<\/style/gi, '<\\/style')
+  const js = files.filter((file) => file.language === 'javascript').map((file) => file.content).join('\n').replace(/<\/script/gi, '<\\/script')
+  let html = htmlFile?.content || '<!DOCTYPE html><html><head></head><body></body></html>'
+  html = html.replace(/<link[^>]+href=["'][^"']*\.css["'][^>]*>/gi, '')
+  html = html.replace(/<script[^>]+src=["'][^"']*\.js["'][^>]*><\/script>/gi, '')
+  html = /<\/head>/i.test(html) ? html.replace(/<\/head>/i, `<style>${css}</style></head>`) : `<style>${css}</style>${html}`
+  html = /<\/body>/i.test(html) ? html.replace(/<\/body>/i, `<script>${js}</script></body>`) : `${html}<script>${js}</script>`
+  return html
+}
+
+function EditorWorkspace({ starterCode, language, expectedOutput, title, topic, onCodeChange, onRecordAttempt, hint, context, lessons = [], onComplete, onPrevious, onNext, isSignedIn = false }) {
   const [code, setCode] = useState(starterCode)
-  const [selectedLanguage, setSelectedLanguage] = useState(language)
   const [runId, setRunId] = useState(0)
   const [output, setOutput] = useState('')
   const [runStatus, setRunStatus] = useState('idle')
@@ -432,41 +684,9 @@ function EditorWorkspace({ starterCode, language, expectedOutput, title, topic, 
 
   useEffect(() => { onCodeChange?.(code) }, [code, onCodeChange])
 
-  async function runCode() {
+  function runCode() {
     setFeedback('')
     setActiveOutputTab('output')
-    if (selectedLanguage === 'python') {
-      setRunStatus('running')
-      setExecutionStatus('running')
-      if (import.meta.env.DEV && import.meta.env.VITE_ENABLE_SERVERLESS !== 'true') {
-        setOutput('Python needs the configured Judge0 server endpoint. Start with `npx vercel dev` to use serverless functions.')
-        setRunStatus('error')
-        setExecutionStatus('infrastructure_error')
-        return
-      }
-      try {
-        const authHeaders = await getAuthHeaders()
-        const response = await fetch('/api/execute', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json', ...authHeaders },
-          body: JSON.stringify({ sourceCode: code }),
-        })
-        const result = await response.json().catch(() => null)
-        if (!response.ok) {
-          throw new Error(result?.error || (response.status === 404
-            ? 'Python needs the configured Judge0 endpoint. Run `npx vercel dev` to use serverless functions.'
-            : `Python execution is unavailable (HTTP ${response.status}).`))
-        }
-        setOutput(result.error ? `${result.error}\n${result.output}`.trim() : result.output || '(No output)')
-        setRunStatus(result.status === 'success' ? 'success' : 'error')
-        setExecutionStatus(result.status)
-      } catch (error) {
-        setOutput(error instanceof Error ? error.message : 'Python execution is unavailable.')
-        setRunStatus('error')
-        setExecutionStatus('infrastructure_error')
-      }
-      return
-    }
     setOutput('')
     setRunStatus('running')
     setExecutionStatus('running')
@@ -488,8 +708,10 @@ function EditorWorkspace({ starterCode, language, expectedOutput, title, topic, 
       setFeedback('Run your code first, then submit it for a check.')
       return
     }
-    const passed = runStatus === 'success' && matchesExpectedOutput(output, expectedOutput)
-    onRecordAttempt({ lessonId: context?.id, title, topic, passed, output, expectedOutput, language: selectedLanguage, code, executionStatus: passed ? 'accepted' : runStatus === 'error' ? executionStatus : 'wrong_answer' })
+    const passed = runStatus === 'success' && (language === 'html'
+      ? matchesExpectedOutput(comparableOutput(output, 'html'), comparableOutput(expectedOutput, 'html'))
+      : matchesExpectedOutput(output, expectedOutput))
+    onRecordAttempt({ lessonId: context?.id, title, topic, passed, output, expectedOutput, language, code, executionStatus: passed ? 'accepted' : runStatus === 'error' ? executionStatus : 'wrong_answer' })
     setFeedback(passed ? 'That matches the expected output. Nice work!' : 'Not quite yet. Compare your output with the expected result, then make another attempt.')
     setActiveOutputTab('feedback')
     if (passed) onComplete?.()
@@ -503,7 +725,7 @@ function EditorWorkspace({ starterCode, language, expectedOutput, title, topic, 
     }
     setBusy(true)
     setFeedback('Thinking through a hint...')
-    const result = await askTutor({ question: 'Please give me a hint, not the full solution.', code, relatedLanguage: selectedLanguage, context: { ...context, title, topic, hint }, skillLevel: context?.skillLevel || 'Beginner' })
+    const result = await askTutor({ question: 'Please give me a hint, not the full solution.', code, relatedLanguage: language, context: { ...context, title, topic, hint }, skillLevel: context?.skillLevel || 'Beginner' })
     setFeedback(`${result.mode === 'demo' ? 'Tutor demo · ' : ''}${result.reply}`)
     setActiveOutputTab('feedback')
     setBusy(false)
@@ -521,7 +743,7 @@ function EditorWorkspace({ starterCode, language, expectedOutput, title, topic, 
     }
     setBusy(true)
     setFeedback('Reading the error and your code...')
-    const result = await askTutor({ question: 'Explain what this error means and guide me toward a fix without rewriting my whole solution.', error: output, code, relatedLanguage: selectedLanguage, context: { ...context, title, topic }, skillLevel: context?.skillLevel || 'Beginner' })
+    const result = await askTutor({ question: 'Explain what this error means and guide me toward a fix without rewriting my whole solution.', error: output, code, relatedLanguage: language, context: { ...context, title, topic }, skillLevel: context?.skillLevel || 'Beginner' })
     setFeedback(`${result.mode === 'demo' ? 'Tutor demo · ' : ''}${result.reply}`)
     setActiveOutputTab('feedback')
     setBusy(false)
@@ -536,14 +758,14 @@ function EditorWorkspace({ starterCode, language, expectedOutput, title, topic, 
     setFeedback('')
   }
 
-  return <section className={`editor-workspace ${isPlayground ? 'editor-workspace-wide' : ''}`}>
-      <div className="editor-toolbar"><div className="editor-file"><span className="file-language-icon">{selectedLanguage === 'javascript' ? 'JS' : selectedLanguage === 'python' ? 'PY' : selectedLanguage.toUpperCase()}</span><span>{isPlayground ? `main.${selectedLanguage === 'javascript' ? 'js' : selectedLanguage === 'python' ? 'py' : selectedLanguage}` : `${title.toLowerCase().replaceAll(' ', '-')}.js`}</span><span className="editor-unsaved" /></div><div className="editor-controls">{isPlayground ? <label className="editor-language-select"><span className="sr-only">Playground language</span><select value={selectedLanguage} onChange={(event) => { const nextLanguage = event.target.value; setSelectedLanguage(nextLanguage); setCode(nextLanguage === 'python' ? 'print("Hello, world!")' : nextLanguage === 'html' ? '<h1>Hello, world!</h1>\n<p>Make something here.</p>' : nextLanguage === 'css' ? 'body {\n  font-family: sans-serif;\n  color: #2f785e;\n}' : 'const greeting = "Hello, world!";\nconsole.log(greeting);'); setOutput(''); setRunStatus('idle') }}><option value="javascript">JavaScript</option><option value="html">HTML preview</option><option value="css">CSS preview</option><option value="python">Python · Judge0</option></select><ChevronDown size={13} /></label> : <span className="editor-language">JavaScript</span>}<button className="editor-tool" onClick={resetCode} aria-label="Reset code" title="Reset code"><RotateCcw size={15} /></button><Button variant="run" onClick={runCode} disabled={runStatus === 'running'}><Play size={14} fill="currentColor" />Run</Button></div></div>
-    <div className="monaco-wrap"><Editor height="340px" language={selectedLanguage} theme="vs-dark" value={code} onChange={(value) => { const nextCode = value ?? ''; setCode(nextCode); onCodeChange?.(nextCode) }} options={{ minimap: { enabled: false }, fontSize: 13, lineHeight: 22, padding: { top: 16, bottom: 12 }, scrollBeyondLastLine: false, wordWrap: 'on', automaticLayout: true, fontFamily: '"IBM Plex Mono", Consolas, monospace', lineNumbersMinChars: 3, renderLineHighlight: 'gutter', scrollbar: { verticalScrollbarSize: 7, horizontalScrollbarSize: 7 }, suggestOnTriggerCharacters: true }} /></div>
-    <CodeRunner key={runId} code={code} language={selectedLanguage} runId={runId} onComplete={receiveRun} />
+  return <section className="editor-workspace">
+      <div className="editor-toolbar"><div className="editor-file"><span className="file-language-icon">{language === 'javascript' ? 'JS' : language === 'html' ? 'HTML' : language.toUpperCase()}</span><span>{`${title.toLowerCase().replaceAll(' ', '-')}.${language === 'javascript' ? 'js' : language}`}</span><span className="editor-unsaved" /></div><div className="editor-controls"><span className="editor-language">{language === 'html' ? 'HTML' : 'JavaScript'}</span><button className="editor-tool" onClick={resetCode} aria-label="Reset code" title="Reset code"><RotateCcw size={15} /></button><Button variant="run" onClick={runCode} disabled={runStatus === 'running'}><Play size={14} fill="currentColor" />Run</Button></div></div>
+    <div className="monaco-wrap"><Editor height="340px" language={language} theme="vs-dark" value={code} onChange={(value) => { const nextCode = value ?? ''; setCode(nextCode); onCodeChange?.(nextCode) }} options={{ minimap: { enabled: false }, fontSize: 13, lineHeight: 22, padding: { top: 16, bottom: 12 }, scrollBeyondLastLine: false, wordWrap: 'on', automaticLayout: true, fontFamily: '"IBM Plex Mono", Consolas, monospace', lineNumbersMinChars: 3, renderLineHighlight: 'gutter', scrollbar: { verticalScrollbarSize: 7, horizontalScrollbarSize: 7 }, suggestOnTriggerCharacters: true }} /></div>
+    <CodeRunner key={runId} code={code} language={language} runId={runId} onComplete={receiveRun} />
     <div className="output-panel"><div className="output-header"><div className="output-tabs"><button className={activeOutputTab === 'output' ? 'output-tab-active' : ''} onClick={() => setActiveOutputTab('output')}><Terminal size={14} />Output</button><button className={activeOutputTab === 'feedback' ? 'output-tab-active' : ''} onClick={() => setActiveOutputTab('feedback')}><Sparkles size={14} />Feedback</button></div><span className={`execution-status execution-${runStatus}`}>{runStatus === 'running' ? 'Running' : runStatus === 'success' ? 'Execution succeeded' : runStatus === 'error' ? executionStatus === 'compile_error' ? 'Compile error' : executionStatus === 'runtime_error' ? 'Runtime error' : executionStatus === 'timeout' || executionStatus === 'time_limit' ? 'Time limit' : executionStatus === 'infrastructure_error' ? 'Service unavailable' : 'Execution failed' : 'Ready'}</span></div>
       {activeOutputTab === 'output' ? <pre className={`output-content ${runStatus === 'error' ? 'output-error' : ''}`}>{output || 'Run your code to see what happens.'}</pre> : <div className={`feedback-content ${feedback.includes('matches') ? 'feedback-success' : ''}`}>{feedback || 'Submit your answer for a check, or ask for a hint when you need a nudge.'}</div>}
     </div>
-    <div className="editor-footer"><div className="editor-footer-left"><button className="editor-action" onClick={getHint} disabled={busy}><Lightbulb size={15} />Get a hint</button><button className="editor-action" onClick={explainError} disabled={busy}><CircleHelp size={15} />Explain my error</button>{!isPlayground && <button className="editor-action" onClick={submitAnswer}><CheckCircle2 size={15} />Submit answer</button>}</div><div className="editor-footer-right">{!isPlayground && <span className="safe-runtime"><ShieldCheck size={14} />Runs in an isolated browser frame</span>}{onPrevious && <Button onClick={onPrevious} disabled={lessons.findIndex((lesson) => lesson.id === context?.id) <= 0}><ArrowLeft size={14} />Previous</Button>}{onNext && <Button onClick={onNext}>Next lesson<ArrowRight size={14} /></Button>}</div></div>
+    <div className="editor-footer"><div className="editor-footer-left"><button className="editor-action" onClick={getHint} disabled={busy}><Lightbulb size={15} />Get a hint</button><button className="editor-action" onClick={explainError} disabled={busy}><CircleHelp size={15} />Explain my error</button><button className="editor-action" onClick={submitAnswer}><CheckCircle2 size={15} />Submit answer</button></div><div className="editor-footer-right"><span className="safe-runtime"><ShieldCheck size={14} />Runs in an isolated browser frame</span>{onPrevious && <Button onClick={onPrevious} disabled={lessons.findIndex((lesson) => lesson.id === context?.id) <= 0}><ArrowLeft size={14} />Previous</Button>}{onNext && <Button onClick={onNext}>Next lesson<ArrowRight size={14} /></Button>}</div></div>
   </section>
 }
 
@@ -552,13 +774,13 @@ function CodeRunner({ code, language, runId, onComplete }) {
   const callbackRef = useRef(onComplete)
   useEffect(() => { callbackRef.current = onComplete }, [onComplete])
   useLayoutEffect(() => {
-    if (!runId || language !== 'javascript') return undefined
+    if (!runId) return undefined
     let finished = false
     const timeout = window.setTimeout(() => {
       if (finished) return
       finished = true
       iframeRef.current?.contentWindow?.stop()
-      callbackRef.current({ runId, error: 'JavaScript stopped after 3.5 seconds. Check whether a loop condition can eventually become false.', executionStatus: 'time_limit' })
+      callbackRef.current({ runId, error: 'Execution stopped after 3.5 seconds. Check for a loop or script that never finishes.', executionStatus: 'time_limit' })
     }, 3500)
     function handleMessage(event) {
       if (event.source !== iframeRef.current?.contentWindow || event.data?.source !== 'loopwise-sandbox' || event.data?.runId !== runId) return
@@ -574,20 +796,17 @@ function CodeRunner({ code, language, runId, onComplete }) {
     }
   }, [runId, language])
 
-  if (!runId || language === 'python') return null
+  if (!runId) return null
   const policy = "default-src 'none'; script-src 'unsafe-inline' 'unsafe-eval'; worker-src blob:; style-src 'unsafe-inline'; img-src data:; connect-src 'none'; font-src data:"
   let documentContent
   if (language === 'html') {
-    documentContent = `<!doctype html><meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; img-src data:"><meta name="viewport" content="width=device-width"><style>body{font:14px system-ui;padding:16px;color:#17221e}</style>${code}`
-  } else if (language === 'css') {
-    const cssPolicy = "default-src 'none'; style-src 'unsafe-inline'; img-src data:"
-    documentContent = `<!doctype html><meta http-equiv="Content-Security-Policy" content="${cssPolicy}"><style>${code}</style><body><h2>Live style preview</h2><p>Change your CSS to update this preview.</p><button>Try a button</button></body>`
+    documentContent = `<!doctype html><meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src data:; connect-src 'none'"><meta name="viewport" content="width=device-width"><style>body{font:14px system-ui;padding:16px;color:#17221e}</style>${code}<script>const runId=${runId};let sent=false;const finish=(result)=>{if(sent)return;sent=true;parent.postMessage({source:'loopwise-sandbox',runId,...result},'*')};window.onerror=()=>finish({error:'A script on the page threw an error. Check the console panel or simplify your code.',executionStatus:'runtime_error'});setTimeout(()=>{const clean=document.body.cloneNode(true);clean.querySelectorAll('script,style,noscript,template').forEach((node)=>node.remove());finish({output:((clean.innerText||clean.textContent||'').trim())||'(The page rendered without visible text)',executionStatus:'success'})},80)</script>`
   } else {
     const encoded = btoa(unescape(encodeURIComponent(code)))
     const encodedWorker = btoa(unescape(encodeURIComponent(sandboxWorkerSource)))
     documentContent = `<!doctype html><meta http-equiv="Content-Security-Policy" content="${policy}"><body><script>const runId=${runId};const source=decodeURIComponent(escape(atob('${encoded}')));const workerSource=decodeURIComponent(escape(atob('${encodedWorker}')));const workerUrl=URL.createObjectURL(new Blob([workerSource],{type:'text/javascript'}));const worker=new Worker(workerUrl);let finished=false;const finish=(result)=>{if(finished)return;finished=true;clearTimeout(timer);worker.terminate();URL.revokeObjectURL(workerUrl);document.body.textContent=result.output||'(No output yet)';parent.postMessage({source:'loopwise-sandbox',runId,...result},'*')};const timer=setTimeout(()=>finish({error:'JavaScript stopped after 3 seconds. Check whether a loop condition can eventually become false.',executionStatus:'time_limit'}),3000);worker.onmessage=(event)=>finish(event.data);worker.onerror=(event)=>finish({error:event.message||'JavaScript worker failed.',executionStatus:'runtime_error'});worker.postMessage({source})</script></body>`
   }
-  if (language === 'html' || language === 'css') return <iframe ref={iframeRef} title="Sandboxed HTML and CSS preview" className="preview-frame" sandbox="" srcDoc={documentContent} onLoad={() => callbackRef.current({ runId, output: 'Preview updated' })} />
+  if (language === 'html') return <iframe ref={iframeRef} title="Sandboxed HTML preview" className="preview-frame" sandbox="allow-scripts" srcDoc={documentContent} />
   return <iframe ref={iframeRef} title="Sandboxed code output" className="sandbox-frame" sandbox="allow-scripts" srcDoc={documentContent} />
 }
 
@@ -639,7 +858,7 @@ function ProgressPage({ progress, lessons }) {
   const corrected = countCorrectedAttempts(progress.attempts)
   const topics = [...new Set(lessons.map((lesson) => lesson.topic))]
   const attemptsByTopic = topics.map((topic) => ({ topic, count: progress.attempts.filter((attempt) => attempt.topic === topic).length, passed: progress.attempts.filter((attempt) => attempt.topic === topic && attempt.passed).length }))
-  return <div className="page-content"><PageIntro eyebrow="NOTICE YOUR PROGRESS" title="My progress" description="A clear picture of what you have practiced and what comes next." action={<span className="learning-count"><Activity size={15} />Updated as you learn</span>} /><div className="progress-top-grid"><section className="progress-score-panel"><div className="progress-score-heading"><div><span className="eyebrow">LEARNING PATH</span><h2>JavaScript foundations</h2></div><div className="progress-ring" style={{ '--progress': `${(progress.lessonsCompleted.length / total) * 100}%` }}><strong>{Math.round((progress.lessonsCompleted.length / total) * 100)}<small>%</small></strong></div></div><div className="progress-track"><span style={{ width: `${(progress.lessonsCompleted.length / total) * 100}%` }} /></div><div className="score-details"><span><CheckCircle2 size={15} />{progress.lessonsCompleted.length} lessons completed</span><span><BookOpen size={15} />{progress.lessonsStarted?.length ?? 0} lessons started</span><span><Code2 size={15} />{progress.attempts.length} exercises attempted</span><span><Award size={15} />{passed} passed</span><span><CheckCircle2 size={15} />{corrected} errors corrected</span><span><ListChecks size={15} />{progress.quizAttempts.length} knowledge checks</span></div></section><section className="progress-focus-panel"><span className="eyebrow">SKILL PROFILE</span><div className="skill-profile"><div className="skill-icon"><Target size={19} /></div><div><strong>{progress.skillLevel}</strong><span>Current learning level</span></div></div><p>Practice evidence is collected as you work. No mastery score is inferred from lesson completion alone.</p></section></div><section className="topic-progress-section"><div className="panel-heading"><div><span className="eyebrow">PRACTICE AREAS</span><h2>Topics explored</h2></div><span className="topics-caption">{topics.length} course topics</span></div><div className="topic-table"><div className="topic-table-header"><span>TOPIC</span><span>ATTEMPTS</span><span>PASSED</span><span>ACTIVITY</span></div>{attemptsByTopic.map((item) => <div className="topic-table-row" key={item.topic}><span>{item.topic}</span><span>{item.count}</span><span>{item.passed}</span><span className="topic-mini-track"><i style={{ width: item.count ? `${(item.passed / item.count) * 100}%` : '0%' }} /></span></div>)}</div></section><div className="progress-note"><Lightbulb size={17} /><p><strong>A useful next step:</strong> revisit a topic where a recent attempt needed another try. Your mistakes are part of the learning record, not a score.</p></div></div>
+  return <div className="page-content"><PageIntro eyebrow="NOTICE YOUR PROGRESS" title="My progress" description="A clear picture of what you have practiced and what comes next." action={<span className="learning-count"><Activity size={15} />Updated as you learn</span>} /><div className="progress-top-grid"><section className="progress-score-panel"><div className="progress-score-heading"><div><span className="eyebrow">LEARNING PATH</span><h2>JavaScript &amp; HTML foundations</h2></div><div className="progress-ring" style={{ '--progress': `${(progress.lessonsCompleted.length / total) * 100}%` }}><strong>{Math.round((progress.lessonsCompleted.length / total) * 100)}<small>%</small></strong></div></div><div className="progress-track"><span style={{ width: `${(progress.lessonsCompleted.length / total) * 100}%` }} /></div><div className="score-details"><span><CheckCircle2 size={15} />{progress.lessonsCompleted.length} lessons completed</span><span><BookOpen size={15} />{progress.lessonsStarted?.length ?? 0} lessons started</span><span><Code2 size={15} />{progress.attempts.length} exercises attempted</span><span><Award size={15} />{passed} passed</span><span><CheckCircle2 size={15} />{corrected} errors corrected</span><span><ListChecks size={15} />{progress.quizAttempts.length} knowledge checks</span></div></section><section className="progress-focus-panel"><span className="eyebrow">SKILL PROFILE</span><div className="skill-profile"><div className="skill-icon"><Target size={19} /></div><div><strong>{progress.skillLevel}</strong><span>Current learning level</span></div></div><p>Practice evidence is collected as you work. No mastery score is inferred from lesson completion alone.</p></section></div><section className="topic-progress-section"><div className="panel-heading"><div><span className="eyebrow">PRACTICE AREAS</span><h2>Topics explored</h2></div><span className="topics-caption">{topics.length} course topics</span></div><div className="topic-table"><div className="topic-table-header"><span>TOPIC</span><span>ATTEMPTS</span><span>PASSED</span><span>ACTIVITY</span></div>{attemptsByTopic.map((item) => <div className="topic-table-row" key={item.topic}><span>{item.topic}</span><span>{item.count}</span><span>{item.passed}</span><span className="topic-mini-track"><i style={{ width: item.count ? `${(item.passed / item.count) * 100}%` : '0%' }} /></span></div>)}</div></section><div className="progress-note"><Lightbulb size={17} /><p><strong>A useful next step:</strong> revisit a topic where a recent attempt needed another try. Your mistakes are part of the learning record, not a score.</p></div></div>
 }
 
 function HistoryPage({ progress }) {
@@ -683,11 +902,166 @@ function AuthPanel({ authUser, onSignOut }) {
   return <section className="auth-panel"><div className="settings-section-heading"><span className="settings-section-icon"><LockKeyhole size={16} /></span><div><h2>Account & cloud sync</h2><p>{authUser ? 'Your learning records are linked to your account.' : 'Sign in to sync progress securely with Supabase.'}</p></div></div>{!isCloudConfigured ? <div className="auth-unavailable">Add <code>VITE_SUPABASE_URL</code> and <code>VITE_SUPABASE_ANON_KEY</code> to <code>.env.local</code>, then restart the app to enable authentication.</div> : authUser ? <div className="auth-signed-in"><div><span className="online-dot" /><strong>{authUser.email}</strong></div><Button onClick={onSignOut}><LockKeyhole size={14} />Sign out</Button></div> : <form onSubmit={(event) => { event.preventDefault(); authenticate('signin') }}><label className="field-label">Email<input type="email" autoComplete="email" required value={email} onChange={(event) => setEmail(event.target.value)} /></label><label className="field-label">Password<input type="password" autoComplete="current-password" minLength={8} required value={password} onChange={(event) => setPassword(event.target.value)} /></label><div className="auth-actions"><Button variant="dark" type="submit" disabled={busy}>{busy ? 'Please wait...' : 'Sign in'}</Button><button type="button" className="auth-signup" disabled={busy} onClick={() => authenticate('signup')}>Create account</button></div>{message && <p className="auth-message" role="status">{message}</p>}</form>}</section>
 }
 
+const countryOptions = ['Australia', 'Brazil', 'Canada', 'China', 'France', 'Germany', 'India', 'Indonesia', 'Italy', 'Japan', 'Mexico', 'Netherlands', 'Nigeria', 'Philippines', 'Poland', 'Singapore', 'South Africa', 'South Korea', 'Spain', 'Sweden', 'United Kingdom', 'United States', 'Other']
+
 function SettingsPage({ progress, authUser, onSignOut, onSave }) {
-  const [name, setName] = useState(progress.displayName)
-  const [level, setLevel] = useState(progress.skillLevel)
-  const [language, setLanguage] = useState(progress.preferredLanguage)
-  return <div className="page-content"><PageIntro eyebrow="MAKE IT YOURS" title="Profile & settings" description="Choose how you want to learn. Preferences are saved while you are signed in." /><div className="settings-layout"><div className="settings-stack"><section className="settings-form"><div className="settings-section-heading"><span className="settings-section-icon"><Settings size={17} /></span><div><h2>Learning preferences</h2><p>These details help tailor examples and explanations.</p></div></div><label className="field-label">Display name<input value={name} onChange={(event) => setName(event.target.value)} maxLength={50} /></label><label className="field-label">Current skill level<select value={level} onChange={(event) => setLevel(event.target.value)}><option>Beginner</option><option>Intermediate</option><option>Advanced</option></select></label><label className="field-label">Preferred language<select value={language} onChange={(event) => setLanguage(event.target.value)}><option>JavaScript</option><option>Python</option><option>HTML & CSS</option></select></label><Button variant="dark" onClick={() => onSave({ displayName: name.trim() || 'Learner', skillLevel: level, preferredLanguage: language })}><Check size={15} />Save preferences</Button></section><AuthPanel authUser={authUser} onSignOut={onSignOut} /></div><aside className="settings-connection"><span className="eyebrow">DATA & PRIVACY</span><h2>{authUser ? 'Your cloud account is active' : isCloudConfigured ? 'Supabase is configured' : 'Local learning mode'}</h2><p>{authUser ? 'Your progress is loading from your private account and new activity syncs as you learn.' : isCloudConfigured ? 'Sign in to sync your progress. Apply the included migration before using cloud records.' : 'Progress is only saved while you are signed in. Add Supabase keys and apply the database migration to enable accounts and cloud sync.'}</p><div className="connection-status"><span className={authUser ? 'connected-dot' : ''} />{authUser ? 'Signed in and syncing' : isCloudConfigured ? 'Sign in for private cloud sync' : 'No cloud credentials detected'}</div><div className="privacy-note"><LockKeyhole size={15} /><span>Never put a Supabase service-role key or AI provider key in browser environment variables.</span></div></aside></div></div>
+  const [tab, setTab] = useState('profile')
+  const [message, setMessage] = useState('')
+  const fileRef = useRef(null)
+  const [form, setForm] = useState(() => {
+    const [first = '', ...rest] = (progress.displayName && progress.displayName !== 'Learner' ? progress.displayName : '').split(' ')
+    return {
+      firstName: progress.firstName || first,
+      lastName: progress.lastName || rest.join(' '),
+      skillLevel: progress.skillLevel,
+      preferredLanguage: progress.preferredLanguage,
+      country: progress.country || '',
+      avatar: progress.avatar || '',
+      notifications: { streakReminder: true, lessonUpdates: true, productNews: false, ...progress.notifications },
+    }
+  })
+
+  function updateField(event) {
+    const { name, value } = event.target
+    setForm((current) => ({ ...current, [name]: value }))
+  }
+
+  function updateNotification(name) {
+    setForm((current) => ({ ...current, notifications: { ...current.notifications, [name]: !current.notifications[name] } }))
+  }
+
+  function readAvatar(file) {
+    if (!file) return
+    if (!file.type.startsWith('image/')) { setMessage('Choose a PNG, JPG, or GIF image.'); return }
+    if (file.size > 500_000) { setMessage('Profile photo must be 500 KB or smaller.'); return }
+    const reader = new FileReader()
+    reader.onload = () => { setForm((current) => ({ ...current, avatar: String(reader.result || '') })); setMessage('Photo ready. Save changes to keep it.') }
+    reader.readAsDataURL(file)
+  }
+
+  function saveChanges() {
+    const displayName = [form.firstName.trim(), form.lastName.trim()].filter(Boolean).join(' ') || 'Learner'
+    onSave({
+      firstName: form.firstName.trim(),
+      lastName: form.lastName.trim(),
+      displayName,
+      skillLevel: form.skillLevel,
+      preferredLanguage: form.preferredLanguage,
+      country: form.country,
+      avatar: form.avatar,
+      notifications: form.notifications,
+    })
+    setMessage(authUser ? 'Your profile changes are saved.' : 'Saved on this device. Sign in to sync your profile.')
+  }
+
+  function cancelChanges() {
+    const [first = '', ...rest] = (progress.displayName && progress.displayName !== 'Learner' ? progress.displayName : '').split(' ')
+    setForm({
+      firstName: progress.firstName || first,
+      lastName: progress.lastName || rest.join(' '),
+      skillLevel: progress.skillLevel,
+      preferredLanguage: progress.preferredLanguage,
+      country: progress.country || '',
+      avatar: progress.avatar || '',
+      notifications: { streakReminder: true, lessonUpdates: true, productNews: false, ...progress.notifications },
+    })
+    setMessage('Changes discarded.')
+  }
+
+  return <div className="page-content settings-page">
+    <div className="settings-heading">
+      <div><div className="eyebrow">YOUR ACCOUNT</div><h1>Settings</h1><p>Manage your profile, password, and notification preferences.</p></div>
+      <div className="settings-heading-actions">
+        <Button onClick={cancelChanges}>Cancel</Button>
+        <Button variant="dark" onClick={saveChanges}><Check size={15} />Save changes</Button>
+      </div>
+    </div>
+    <div className="settings-tabs" role="tablist">
+      <button className={tab === 'profile' ? 'settings-tab-active' : ''} onClick={() => setTab('profile')}><UserRound size={15} />My profile</button>
+      <button className={tab === 'password' ? 'settings-tab-active' : ''} onClick={() => setTab('password')}><KeyRound size={15} />Password</button>
+      <button className={tab === 'notifications' ? 'settings-tab-active' : ''} onClick={() => setTab('notifications')}><Bell size={15} />Notifications</button>
+    </div>
+    <div className="settings-layout">
+      <div className="settings-stack">
+        {tab === 'profile' && <>
+          <section className="settings-form">
+            <div className="settings-section-heading"><span className="settings-section-icon"><Camera size={16} /></span><div><h2>Your photo</h2><p>This is shown in the sidebar and on shared lessons.</p></div></div>
+            <div className="avatar-uploader">
+              <span className="avatar-preview">{form.avatar ? <img src={form.avatar} alt="Profile preview" /> : <UserRound size={26} />}</span>
+              <div className="avatar-drop" onDragOver={(event) => event.preventDefault()} onDrop={(event) => { event.preventDefault(); readAvatar(event.dataTransfer.files?.[0]) }}>
+                <input ref={fileRef} type="file" accept="image/png,image/jpeg,image/gif" hidden onChange={(event) => readAvatar(event.target.files?.[0])} />
+                <button type="button" className="avatar-upload-button" onClick={() => fileRef.current?.click()}><Upload size={14} />Click to upload</button>
+                <span>or drag and drop · PNG, JPG, GIF up to 500 KB</span>
+              </div>
+              {form.avatar && <button type="button" className="avatar-remove" onClick={() => setForm((current) => ({ ...current, avatar: '' }))}><Trash2 size={14} />Remove</button>}
+            </div>
+          </section>
+          <section className="settings-form">
+            <div className="settings-section-heading"><span className="settings-section-icon"><UserRound size={16} /></span><div><h2>Personal information</h2><p>Your name and learning level help the tutor tailor its guidance.</p></div></div>
+            <div className="settings-field-grid">
+              <label className="field-label">First name<input name="firstName" value={form.firstName} onChange={updateField} maxLength={50} placeholder="Alex" /></label>
+              <label className="field-label">Last name<input name="lastName" value={form.lastName} onChange={updateField} maxLength={50} placeholder="Rivera" /></label>
+            </div>
+            <label className="field-label">Email address<span className="field-with-icon"><input value={authUser?.email || 'Sign in to link an email'} readOnly /><LockKeyhole size={14} /></span></label>
+            <div className="settings-field-grid">
+              <label className="field-label">Role<select name="skillLevel" value={form.skillLevel} onChange={updateField}><option>Beginner</option><option>Intermediate</option><option>Advanced</option></select></label>
+              <label className="field-label">Preferred language<select name="preferredLanguage" value={form.preferredLanguage} onChange={updateField}><option>JavaScript</option><option>HTML</option><option>HTML &amp; CSS</option><option>Python</option></select></label>
+            </div>
+            <label className="field-label">Country<span className="field-with-icon"><Globe size={14} /><select name="country" value={form.country} onChange={updateField}><option value="">Select your country</option>{countryOptions.map((country) => <option key={country}>{country}</option>)}</select></span></label>
+          </section>
+        </>}
+        {tab === 'password' && <PasswordForm authUser={authUser} />}
+        {tab === 'notifications' && <section className="settings-form"><div className="settings-section-heading"><span className="settings-section-icon"><Bell size={16} /></span><div><h2>Notifications</h2><p>Choose what you want to hear about. Preferences are saved on this device.</p></div></div><div className="notification-list">{[
+          ['streakReminder', 'Streak reminders', 'A nudge if your daily three-lesson goal is slipping.'],
+          ['lessonUpdates', 'New lessons', 'Hear when new JavaScript or HTML lessons arrive.'],
+          ['productNews', 'Product updates', 'Occasional news about Loopwise features.'],
+        ].map(([key, title, description]) => <label className="notification-row" key={key}><div><strong>{title}</strong><span>{description}</span></div><button type="button" role="switch" aria-checked={form.notifications[key]} className={`switch ${form.notifications[key] ? 'switch-on' : ''}`} onClick={() => updateNotification(key)}><span /></button></label>)}</div></section>}
+        {message && <p className="settings-message" role="status">{message}</p>}
+      </div>
+      <aside className="settings-side">
+        <section className="settings-connection">
+          <span className="eyebrow">ACCOUNT</span>
+          <div className="settings-account"><span className="avatar avatar-large">{form.avatar ? <img src={form.avatar} alt="" /> : (form.firstName || 'L').slice(0, 1).toUpperCase()}</span><div><strong>{[form.firstName, form.lastName].filter(Boolean).join(' ') || 'Learner'}</strong><span>{authUser?.email || 'Not signed in'}</span></div></div>
+          <h2>{authUser ? 'Your cloud account is active' : isCloudConfigured ? 'Sign in to sync' : 'Local learning mode'}</h2>
+          <p>{authUser ? 'Progress, attempts, and custom lessons sync with your private account.' : isCloudConfigured ? 'Sign in to save progress and share custom lessons with other learners.' : 'Progress is only saved while you are signed in. Add Supabase keys to enable accounts.'}</p>
+          <div className="connection-status"><span className={authUser ? 'connected-dot' : ''} />{authUser ? 'Signed in and syncing' : isCloudConfigured ? 'Not signed in' : 'No cloud credentials detected'}</div>
+          {authUser && <Button onClick={onSignOut}><LockKeyhole size={14} />Sign out</Button>}
+          <div className="privacy-note"><LockKeyhole size={15} /><span>Never put a Supabase service-role key or AI provider key in browser environment variables.</span></div>
+        </section>
+        <AuthPanel authUser={authUser} onSignOut={onSignOut} />
+      </aside>
+    </div>
+  </div>
+}
+
+function PasswordForm({ authUser }) {
+  const [password, setPassword] = useState('')
+  const [confirm, setConfirm] = useState('')
+  const [visible, setVisible] = useState(false)
+  const [message, setMessage] = useState('')
+  const [busy, setBusy] = useState(false)
+
+  async function updatePassword(event) {
+    event.preventDefault()
+    if (!authUser) { setMessage('Sign in first, then you can set a new password.'); return }
+    if (password.length < 8) { setMessage('Use at least 8 characters for your new password.'); return }
+    if (password !== confirm) { setMessage('The two passwords do not match.'); return }
+    setBusy(true)
+    setMessage('')
+    const { error } = await supabase.auth.updateUser({ password })
+    setMessage(error ? error.message : 'Password updated. Use it the next time you sign in.')
+    setBusy(false)
+  }
+
+  return <section className="settings-form">
+    <div className="settings-section-heading"><span className="settings-section-icon"><KeyRound size={16} /></span><div><h2>Change password</h2><p>{authUser ? 'Choose a new password for your account.' : 'Sign in to manage your password.'}</p></div></div>
+    <form onSubmit={updatePassword}>
+      <label className="field-label">New password<span className="field-with-icon"><input type={visible ? 'text' : 'password'} autoComplete="new-password" minLength={8} value={password} onChange={(event) => setPassword(event.target.value)} required /><button type="button" className="field-icon-button" aria-label={visible ? 'Hide password' : 'Show password'} onClick={() => setVisible((value) => !value)}>{visible ? <EyeOff size={15} /> : <Eye size={15} />}</button></span></label>
+      <label className="field-label">Confirm new password<input type={visible ? 'text' : 'password'} autoComplete="new-password" minLength={8} value={confirm} onChange={(event) => setConfirm(event.target.value)} required /></label>
+      <Button variant="dark" type="submit" disabled={busy}>{busy ? 'Updating...' : 'Update password'}</Button>
+    </form>
+    {message && <p className="settings-message" role="status">{message}</p>}
+  </section>
 }
 
 export default App

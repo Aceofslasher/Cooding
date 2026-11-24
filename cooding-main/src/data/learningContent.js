@@ -1,3 +1,5 @@
+import { htmlLessons } from './htmlLessons.js'
+
 const lessonData = [
   {
     id: 'variables',
@@ -964,9 +966,9 @@ const w3schoolsReferences = {
   performance: 'js/js_timing.asp',
 }
 
-export const lessons = lessonData.map((lesson) => ({
+export const lessons = [...lessonData, ...htmlLessons].map((lesson) => ({
   ...lesson,
-  referenceUrl: `https://www.w3schools.com/${w3schoolsReferences[lesson.id] || 'js/default.asp'}`,
+  referenceUrl: lesson.referenceUrl || `https://www.w3schools.com/${w3schoolsReferences[lesson.id] || 'js/default.asp'}`,
 }))
 
 export const lessonQuizzes = {
@@ -1030,6 +1032,12 @@ export const lessonQuizzes = {
   'browser-storage': { question: 'Which Web Storage object persists across browser sessions?', choices: ['localStorage', 'sessionStorage only', 'console'], answer: 0 },
   'fetch-api': { question: 'What does fetch return?', choices: ['A Promise', 'A CSS rule', 'A synchronous string'], answer: 0 },
   performance: { question: 'Which API reads high-resolution elapsed time?', choices: ['performance.now()', 'Date.time()', 'console.timeOnly()'], answer: 0 },
+  'html-basics': { question: 'Which element holds the content visitors can see?', choices: ['<head>', '<body>', '<title>'], answer: 1 },
+  'html-elements': { question: 'Which tag closes a section element?', choices: ['</section>', '<section>', '</div>'], answer: 0 },
+  'html-headings': { question: 'Which heading marks the most important idea?', choices: ['<h6>', '<h1>', '<p>'], answer: 1 },
+  'html-links': { question: 'Which attribute names a link destination?', choices: ['src', 'href', 'alt'], answer: 1 },
+  'html-lists': { question: 'Which element creates a numbered list?', choices: ['<ul>', '<ol>', '<li>'], answer: 1 },
+  'html-forms': { question: 'Which element describes a form control?', choices: ['<label>', '<legend>', '<meta>'], answer: 0 },
 }
 
 export const practiceExercises = [
@@ -1045,8 +1053,14 @@ export const emptyProgress = {
   quizAttempts: [],
   messages: [],
   displayName: 'Learner',
+  firstName: '',
+  lastName: '',
+  avatar: '',
+  country: '',
+  notifications: { streakReminder: true, lessonUpdates: true, productNews: false },
   skillLevel: 'Beginner',
   preferredLanguage: 'JavaScript',
+  streak: { count: 0, lastDay: null, day: null, dayCount: 0, dayLessons: [] },
 }
 
 export function readProgress() {

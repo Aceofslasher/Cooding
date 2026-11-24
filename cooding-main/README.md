@@ -4,12 +4,13 @@ Loopwise is a small programming-learning workspace for students. It combines sho
 
 ## What works
 
-- Responsive dashboard, learning path, lessons, practice, playground, tutor, progress, history, and profile pages.
-- Sixty built-in JavaScript lessons: 20 each for beginner, intermediate, and advanced, plus three practice exercises and short knowledge checks. Each lesson links to a relevant W3Schools JavaScript reference. These are educational starter content, not student results.
-- A separate Lesson Studio for creating, importing, exporting, and removing custom JavaScript lessons. Custom lessons are stored in this browser and included in the learning path; export JSON to back them up or move them to another browser.
-- Monaco editing, JavaScript execution in a sandboxed browser frame, and restricted HTML/CSS previews.
+- Responsive dashboard, learning path, lessons, practice, multi-file playground, tutor, progress, history, and tabbed settings pages.
+- Seventy-two built-in lessons: sixty JavaScript lessons (20 each for beginner, intermediate, and advanced) and twelve HTML lessons. Each lesson links to a relevant W3Schools reference. These are educational starter content, not student results.
+- A separate Lesson Studio for creating, importing, exporting, and removing custom JavaScript or HTML lessons. Custom lessons are stored in this browser; while signed in they are also published to the shared `custom_lessons` table so other accounts can open them from the learning path.
+- Monaco editing, a playground workspace with an HTML/CSS/JavaScript file explorer and tabs, JavaScript execution in a sandboxed browser frame, and restricted HTML/CSS previews.
 - A local tutor response mode that gives contextual hints without requiring an API key.
 - Sign-in-gated progress: lesson completion, exercise attempts, tutor messages, and preferences are saved only while signed in; signed-out activity stays in memory for that session.
+- A daily streak in the sidebar: sign in and finish three different lessons in a day to extend it. Missing a day resets it.
 - Optional Supabase email sign-up/sign-in and cloud sync for profile settings, lesson progress, coding attempts, and quiz scores. Hosted AI and Python endpoints require Supabase token-verification settings and a student access token.
 - Optional Vercel endpoints for an OpenAI-compatible AI provider and server-side Python execution through Judge0.
 - Supabase schema, RLS policies, indexes, starter course content, exercises, and non-public test records.
@@ -30,21 +31,21 @@ npm run dev
 
 Open the URL Vite prints, normally `http://localhost:5173`. Without credentials, lessons, JavaScript practice, and demo tutor replies work locally. Progress is only saved while signed in; signed-out work is session-only and is cleared on reload or sign-out.
 
-Open **Lesson studio** in the sidebar to create a custom lesson or import a JSON lesson file. Use **Export JSON** to back up custom lessons. Custom lesson content stays local to the current browser; its progress follows the same sign-in rule and is not synced to Supabase.
+Open **Lesson studio** in the sidebar to create a custom lesson or import a JSON lesson file. Use **Export JSON** to back up custom lessons. Signed-out custom lessons stay in the current browser; when you sign in, they are published to the shared lessons table and visible to other accounts (and their shared lessons appear in your learning path).
 
 Vite's development server does not run Vercel serverless functions. To exercise `/api/tutor` and `/api/execute` locally, install/use the Vercel CLI, set `VITE_ENABLE_SERVERLESS=true` in `.env.local`, and run `npx vercel dev` after linking the project. Without that setting, AI uses its labeled demo response and Python explains how to start the configured runner.
 
 ## Configure Supabase
 
 1. Create a Supabase project and open its SQL Editor.
-2. Run the SQL files in `supabase/migrations` in filename order. Existing projects that already ran the initial schema should apply the newer migration to balance lesson levels.
+2. Run the SQL files in `supabase/migrations` in filename order. Existing projects that already ran the initial schema should also apply `202611230001_balance_javascript_levels.sql` and `202611250001_html_custom_lessons.sql`, which adds the HTML course, profile name/country columns, and the shared `custom_lessons` table with owner-write RLS.
 3. In Authentication settings, enable email/password sign-in and set the local Site URL to `http://localhost:5173` (or the Vercel preview URL when deployed).
 4. Copy `.env.example` to `.env.local`. Set `VITE_SUPABASE_URL` and `VITE_SUPABASE_ANON_KEY` using the project's URL and public anon/publishable key.
 5. Restart the dev server. Create an account from Profile & settings. New accounts receive a profile row through the database trigger.
 
 RLS is enabled on every table. Published learning content is readable to visitors; student records require an authenticated matching `auth.uid()`. Hidden test cases have no student-read policy unless `visible_to_student` is true. Never place the Supabase service-role key in the browser.
 
-Current cloud sync persists the profile, lesson status, coding-attempt records, and quiz scores. Tutor messages are saved only while signed in, with the browser snapshot. The UI remains usable while signed out, but progress is not persisted, and hosted AI endpoints require a signed-in session.
+Current cloud sync persists the profile (including first/last name and country), lesson status, coding-attempt records, and quiz scores. Published custom lessons are stored in Supabase. Tutor messages, the profile photo, notification choices, and the streak counter are kept in the browser snapshot. The UI remains usable while signed out, but progress is not persisted, and hosted AI endpoints require a signed-in session.
 
 ## Configure AI and Python
 
@@ -74,7 +75,7 @@ npm run lint
 npm run build
 ```
 
-Tests cover progress summaries, output comparison, corrected attempts, and secure endpoint defaults. Browser QA verified the lesson editor, sandboxed JavaScript output and timeout, answer submission, quiz scoring, HTML/CSS previews, theme switching, and mobile layout. Manual follow-up is still needed for Supabase auth/RLS against a configured project, provider API failure cases, Python results from a configured Judge0 host, and hosted deployment.
+Tests cover progress summaries, output comparison, corrected attempts, secure endpoint defaults, and streak counting. Browser QA verified the multi-file playground, HTML lessons and references, tabbed settings, custom HTML lessons, sandboxed JavaScript output and timeout, answer submission, quiz scoring, HTML/CSS previews, theme switching, and mobile layout. Manual follow-up is still needed for Supabase auth/RLS against a configured project, provider API failure cases, Python results from a configured Judge0 host, and hosted deployment.
 
 ## Deploy to Vercel
 
@@ -89,7 +90,7 @@ Tests cover progress summaries, output comparison, corrected attempts, and secur
 
 - Authentication is optional for local learning; cloud data is protected by Supabase RLS.
 - The frontend currently bundles sample lessons and their visible expected output. Hidden database tests are not exposed, but a secure exercise-grading endpoint is not yet implemented.
-- Progress supports lesson completion, coding attempts, quiz scores, and a simple recommendation based on the latest unsuccessful topic. Streak calculation, error-correction linking, and richer adaptive recommendations need more implementation.
-- Cloud synchronization is implemented for profiles, lesson status, coding attempts, and quiz scores, not tutor conversation history or every requested table.
+- Progress supports lesson completion, coding attempts, quiz scores, a daily three-lesson streak, and a simple recommendation based on the latest unsuccessful topic. Error-correction linking and richer adaptive recommendations need more implementation.
+- Cloud synchronization is implemented for profiles, lesson status, coding attempts, quiz scores, and published custom lessons, not tutor conversation history, the profile photo, or notification settings.
 - The tutor's built-in demo mode is rule-based. A real model is used only when the server endpoint and provider credentials are configured.
 - There is no password-reset flow, OAuth provider, account deletion flow, or automated end-to-end auth test yet.

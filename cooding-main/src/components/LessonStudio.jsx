@@ -72,7 +72,7 @@ export default function LessonStudio({ lessons, allLessons, onAddLessons, onDele
       <div className="lesson-studio-toolbar">
         <div>
           <strong>{lessons.length} custom lesson{lessons.length === 1 ? '' : 's'}</strong>
-          <span>Stored in this browser; export JSON to back them up or move them.</span>
+          <span>Stored in this browser and shared with other learners while you are signed in.</span>
         </div>
         <div className="lesson-studio-actions">
           <input ref={fileInput} type="file" accept=".json,application/json" hidden onChange={importFile} />
@@ -88,6 +88,7 @@ export default function LessonStudio({ lessons, allLessons, onAddLessons, onDele
             <label className="lesson-studio-field">Lesson title<input name="title" value={draft.title} onChange={updateField} maxLength={120} required /></label>
             <label className="lesson-studio-field">Topic<input name="topic" value={draft.topic} onChange={updateField} maxLength={80} required /></label>
             <label className="lesson-studio-field">Level<select name="level" value={draft.level} onChange={updateField}><option>Beginner</option><option>Intermediate</option><option>Advanced</option></select></label>
+            <label className="lesson-studio-field">Language<select name="language" value={draft.language} onChange={updateField}><option value="javascript">JavaScript</option><option value="html">HTML</option></select></label>
             <label className="lesson-studio-field">Minutes<input name="minutes" type="number" min="1" max="120" value={draft.minutes} onChange={updateField} required /></label>
             <label className="lesson-studio-field lesson-studio-wide">Short description<input name="description" value={draft.description} onChange={updateField} maxLength={240} required /></label>
             <label className="lesson-studio-field lesson-studio-wide">Learning objective<input name="objective" value={draft.objective} onChange={updateField} maxLength={240} required /></label>
@@ -98,7 +99,7 @@ export default function LessonStudio({ lessons, allLessons, onAddLessons, onDele
             <label className="lesson-studio-field lesson-studio-wide">Hint<textarea name="hint" value={draft.hint} onChange={updateField} rows="2" maxLength={5000} required /></label>
             <label className="lesson-studio-field lesson-studio-wide">Reference URL (optional)<input name="referenceUrl" type="url" value={draft.referenceUrl} onChange={updateField} placeholder="https://www.w3schools.com/js/" /></label>
           </div>
-          <div className="lesson-studio-form-footer"><span>JavaScript lessons · Maximum 5,000 characters per text field</span><button className="button button-dark" type="submit"><Plus size={14} />Add to learning path</button></div>
+          <div className="lesson-studio-form-footer"><span>JavaScript or HTML lessons · Maximum 5,000 characters per text field</span><button className="button button-dark" type="submit"><Plus size={14} />Add to learning path</button></div>
         </form>
 
         <aside className="lesson-studio-list">
