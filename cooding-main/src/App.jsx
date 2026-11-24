@@ -17,6 +17,7 @@ import { deleteSharedCustomLesson, loadSharedCustomLessons, publishCustomLessons
 import { readCustomLessons, saveCustomLessons } from './services/lessonLibrary'
 import { countCorrectedAttempts, matchesExpectedOutput } from './utils/progress'
 import { htmlToText } from './utils/html'
+import { deriveSkillLevel, skillLevelPlan } from './utils/skill'
 import { STREAK_GOAL, recordStreakCompletion, summarizeStreak } from './utils/streak'
 import './App.css'
 
@@ -108,6 +109,8 @@ function App() {
   const builtInIds = new Set(lessons.map((lesson) => lesson.id))
   const communityLessons = sharedLessons.filter((lesson) => !localCustomIds.has(lesson.id) && !builtInIds.has(lesson.id))
   const allLessons = [...lessons, ...customLessons, ...communityLessons]
+  const builtInCompleted = progress.lessonsCompleted.filter((id) => builtInIds.has(id)).length
+  const progressView = { ...progress, skillLevel: deriveSkillLevel(builtInCompleted, lessons.length) }
 
   useEffect(() => {
     try {
@@ -300,7 +303,7 @@ function App() {
           {authUser && <button className="nav-link signout-link" onClick={() => supabase.auth.signOut().then(() => setToast('Signed out. Progress is only saved while signed in.'))}><LockKeyhole size={16} /><span>Sign out</span></button>}
           <button className="profile-row" onClick={() => changePage('settings')}>
             <span className="avatar">{progress.avatar ? <img src={progress.avatar} alt="" /> : (progress.displayName || 'L').slice(0, 1).toUpperCase()}</span>
-            <span className="profile-copy"><strong>{progress.displayName || 'Learner'}</strong><small>{progress.skillLevel} learner</small></span>
+            <span className="profile-copy"><strong>{progress.displayName || 'Learner'}</strong><small>{progressView.skillLevel} learner</small></span>
             <ChevronDown size={15} />
           </button>
         </div>
@@ -320,16 +323,16 @@ function App() {
           </div>
         </header>
 
-        {page === 'dashboard' && <Dashboard progress={progress} lessons={allLessons} onOpenLesson={openLesson} onNavigate={changePage} />}
+        {page === 'dashboard' && <Dashboard progress={progressView} lessons={allLessons} onOpenLesson={openLesson} onNavigate={changePage} />}
         {page === 'learn' && <LearningPath progress={progress} lessons={allLessons} authUser={authUser} onOpenLesson={openLesson} />}
         {page === 'lesson-studio' && <LessonStudio lessons={customLessons} allLessons={allLessons} onAddLessons={addCustomLessons} onDeleteLesson={deleteCustomLesson} onOpenLesson={openLesson} />}
-        {page === 'lesson' && <LessonWorkspace key={currentLesson.id} lesson={currentLesson} lessons={allLessons} progress={progress} authUser={authUser} onCodeChange={setCurrentCode} onComplete={completeLesson} onRecordAttempt={recordAttempt} onRecordQuiz={recordQuiz} onBack={() => changePage('learn')} onPrevious={() => openLesson(allLessons[Math.max(0, allLessons.findIndex((lesson) => lesson.id === currentLesson.id) - 1)])} onNext={() => openLesson(allLessons[(allLessons.findIndex((lesson) => lesson.id === currentLesson.id) + 1) % allLessons.length])} />}
+        {page === 'lesson' && <LessonWorkspace key={currentLesson.id} lesson={currentLesson} lessons={allLessons} progress={progressView} authUser={authUser} onCodeChange={setCurrentCode} onComplete={completeLesson} onRecordAttempt={recordAttempt} onRecordQuiz={recordQuiz} onBack={() => changePage('learn')} onPrevious={() => openLesson(allLessons[Math.max(0, allLessons.findIndex((lesson) => lesson.id === currentLesson.id) - 1)])} onNext={() => openLesson(allLessons[(allLessons.findIndex((lesson) => lesson.id === currentLesson.id) + 1) % allLessons.length])} />}
         {page === 'playground' && <Playground onCodeChange={setCurrentCode} isSignedIn={Boolean(authUser)} />}
-        {page === 'practice' && <Practice progress={progress} onOpenLesson={openLesson} />}
-        {page === 'tutor' && <TutorPage progress={progress} currentCode={currentCode} currentLesson={currentLesson} tutorLanguage={tutorLanguage} onMessagesChange={(messages) => setProgress((previous) => ({ ...previous, messages }))} />}
-        {page === 'progress' && <ProgressPage progress={progress} lessons={allLessons} />}
+        {page === 'practice' && <Practice progress={progressView} authUser={authUser} onRecordAttempt={recordAttempt} />}
+        {page === 'tutor' && <TutorPage progress={progressView} currentCode={currentCode} currentLesson={currentLesson} tutorLanguage={tutorLanguage} onMessagesChange={(messages) => setProgress((previous) => ({ ...previous, messages }))} />}
+        {page === 'progress' && <ProgressPage progress={progressView} lessons={allLessons} />}
         {page === 'history' && <HistoryPage progress={progress} />}
-        {page === 'settings' && <SettingsPage progress={progress} authUser={authUser} onSignOut={() => supabase?.auth.signOut()} onSave={(updates) => { setProgress((previous) => ({ ...previous, ...updates })); if (authUser) saveCloudProfile(authUser.id, updates).catch(() => setToast('Profile saved locally, but cloud sync failed')); setToast('Profile preferences saved') }} />}
+        {page === 'settings' && <SettingsPage progress={progressView} authUser={authUser} onSignOut={() => supabase?.auth.signOut()} onSave={(updates) => { setProgress((previous) => ({ ...previous, ...updates })); if (authUser) saveCloudProfile(authUser.id, updates).catch(() => setToast('Profile saved locally, but cloud sync failed')); setToast('Profile preferences saved') }} />}
       </main>
       {toast && <div className="toast"><CheckCircle2 size={17} />{toast}</div>}
     </div>
@@ -366,7 +369,7 @@ function Dashboard({ progress, lessons, onOpenLesson, onNavigate }) {
         <div className="metric-grid">
           <Metric label="Lessons completed" value={completed} icon={BookOpen} detail={`${progress.lessonsStarted?.length ?? 0} started`} />
           <Metric label="Exercises tried" value={attempted} icon={Code2} detail={attempted ? `${passed} passed so far` : 'Your attempts show here'} />
-          <Metric label="Current level" value={progress.skillLevel} icon={Target} detail="Set in your preferences" compact />
+          <Metric label="Current level" value={progress.skillLevel} icon={Target} detail="Unlocks as you complete lessons" compact />
           <Metric label="Latest quiz" value={progress.quizAttempts.length ? `${progress.quizAttempts[0].score}/${progress.quizAttempts[0].totalQuestions}` : '—'} icon={Award} detail={progress.quizAttempts.length ? 'Most recent knowledge check' : 'No checks completed'} compact />
         </div>
         <div className="snapshot-progress"><div className="snapshot-progress-label"><span>Course progress</span><strong>{lessons.length ? Math.round((completed / lessons.length) * 100) : 0}%</strong></div><div className="progress-track"><span style={{ width: `${Math.min(100, (completed / lessons.length) * 100)}%` }} /></div><span className="snapshot-footnote">{completed} of {lessons.length} learning path lessons completed</span></div>
@@ -477,7 +480,7 @@ function LessonWorkspace({ lesson, lessons, progress, authUser, onCodeChange, on
     <button className="back-link" onClick={onBack}><ArrowLeft size={15} />Back to learning path</button>
     <div className="workspace-heading"><div><div className="lesson-row-meta"><span>{lesson.topic}</span><i />{lesson.level}<i /><Clock3 size={13} />{lesson.minutes} min</div><h1>{lesson.title}</h1><p>{lesson.description}</p></div><span className={`lesson-state ${complete ? 'lesson-state-done' : ''}`}>{complete ? <CheckCircle2 size={15} /> : <BookOpen size={15} />}{complete ? 'Completed' : 'In progress'}</span></div>
     <div className="workspace-grid"><section className="lesson-instructions"><div className="workspace-section-title"><span className="step-number">01</span><div><span className="eyebrow">THE IDEA</span><h2>What you will learn</h2></div></div><p className="lesson-explanation">{lesson.explanation}</p><div className="objective-box"><div className="objective-icon"><Target size={17} /></div><div><span>YOUR OBJECTIVE</span><strong>{lesson.objective}</strong></div></div><a className="reference-link" href={referenceUrl} target="_blank" rel="noreferrer">Read the W3Schools reference<ArrowUpRight size={14} /></a><div className="instruction-divider" /><div className="workspace-section-title compact-title"><span className="step-number">02</span><div><span className="eyebrow">YOUR TURN</span><h2>Try it yourself</h2></div></div><p className="exercise-prompt">Update the starter code so it produces the expected result. Run it to check your output.</p><div className="expected-output"><span>EXPECTED OUTPUT</span><code>{lesson.expectedOutput.split('\n').map((line, index) => <span key={index}>{line}</span>)}</code></div><button className="example-toggle" onClick={() => setShowExample((value) => !value)}><Lightbulb size={15} />{showExample ? 'Hide example' : 'Show example'}<ChevronDown className={showExample ? 'rotate-icon' : ''} size={14} /></button>{showExample && <pre className="example-code">{lesson.example}</pre>}</section>
-      <EditorWorkspace key={lesson.id} starterCode={lesson.starterCode} language={lesson.language} expectedOutput={lesson.expectedOutput} title={lesson.title} topic={lesson.topic} onCodeChange={onCodeChange} onRecordAttempt={onRecordAttempt} hint={lesson.hint} context={lesson} lessons={lessons} isSignedIn={Boolean(authUser)} onComplete={() => onComplete(lesson)} onPrevious={onPrevious} onNext={onNext} />
+      <EditorWorkspace key={lesson.id} starterCode={lesson.starterCode} language={lesson.language} expectedOutput={lesson.expectedOutput} title={lesson.title} topic={lesson.topic} onCodeChange={onCodeChange} onRecordAttempt={onRecordAttempt} hint={lesson.hint} context={lesson} lessons={lessons} isSignedIn={Boolean(authUser)} skillLevel={progress.skillLevel} onComplete={() => onComplete(lesson)} onPrevious={onPrevious} onNext={onNext} />
     </div>
     <QuizCheck lesson={lesson} onRecordQuiz={onRecordQuiz} />
   </div>
@@ -672,7 +675,7 @@ function buildPreviewDocument(files) {
   return html
 }
 
-function EditorWorkspace({ starterCode, language, expectedOutput, title, topic, onCodeChange, onRecordAttempt, hint, context, lessons = [], onComplete, onPrevious, onNext, isSignedIn = false }) {
+function EditorWorkspace({ starterCode, language, expectedOutput, title, topic, onCodeChange, onRecordAttempt, hint, context, lessons = [], onComplete, onPrevious, onNext, isSignedIn = false, skillLevel = 'Beginner' }) {
   const [code, setCode] = useState(starterCode)
   const [runId, setRunId] = useState(0)
   const [output, setOutput] = useState('')
@@ -725,7 +728,7 @@ function EditorWorkspace({ starterCode, language, expectedOutput, title, topic, 
     }
     setBusy(true)
     setFeedback('Thinking through a hint...')
-    const result = await askTutor({ question: 'Please give me a hint, not the full solution.', code, relatedLanguage: language, context: { ...context, title, topic, hint }, skillLevel: context?.skillLevel || 'Beginner' })
+    const result = await askTutor({ question: 'Please give me a hint, not the full solution.', code, relatedLanguage: language, context: { ...context, title, topic, hint }, skillLevel })
     setFeedback(`${result.mode === 'demo' ? 'Tutor demo · ' : ''}${result.reply}`)
     setActiveOutputTab('feedback')
     setBusy(false)
@@ -743,7 +746,7 @@ function EditorWorkspace({ starterCode, language, expectedOutput, title, topic, 
     }
     setBusy(true)
     setFeedback('Reading the error and your code...')
-    const result = await askTutor({ question: 'Explain what this error means and guide me toward a fix without rewriting my whole solution.', error: output, code, relatedLanguage: language, context: { ...context, title, topic }, skillLevel: context?.skillLevel || 'Beginner' })
+    const result = await askTutor({ question: 'Explain what this error means and guide me toward a fix without rewriting my whole solution.', error: output, code, relatedLanguage: language, context: { ...context, title, topic }, skillLevel })
     setFeedback(`${result.mode === 'demo' ? 'Tutor demo · ' : ''}${result.reply}`)
     setActiveOutputTab('feedback')
     setBusy(false)
@@ -810,9 +813,39 @@ function CodeRunner({ code, language, runId, onComplete }) {
   return <iframe ref={iframeRef} title="Sandboxed code output" className="sandbox-frame" sandbox="allow-scripts" srcDoc={documentContent} />
 }
 
-function Practice({ progress, onOpenLesson }) {
-  const attempted = new Set(progress.attempts.flatMap((attempt) => [attempt.title, lessons.find((lesson) => lesson.topic === attempt.topic)?.title]))
-  return <div className="page-content"><PageIntro eyebrow="RETRIEVE, APPLY, IMPROVE" title="Practice" description="Short exercises help new ideas stick. Try, check, and try again." action={<span className="learning-count"><Target size={15} />{practiceExercises.length} exercises</span>} /><div className="practice-summary"><div className="practice-summary-icon"><Award size={20} /></div><div><strong>Practice at your own pace</strong><span>These starter exercises use the same concepts as your lessons.</span></div><span className="practice-summary-count">{progress.attempts.filter((attempt) => attempt.passed).length} passed</span></div><div className="exercise-grid">{practiceExercises.map((exercise, index) => { const lesson = lessons.find((item) => item.id === exercise.lessonId); return <article className="exercise-card" key={exercise.id}><div className="exercise-card-top"><span className="exercise-number">0{index + 1}</span><span className="difficulty-tag">{exercise.difficulty}</span></div><span className="lesson-tag">{exercise.topic}</span><h2>{exercise.title}</h2><p>{exercise.prompt}</p><div className="exercise-card-footer"><span>{attempted.has(lesson.title) ? <><CheckCircle2 size={14} />Attempted</> : <><Clock3 size={14} />5 min</>}</span><Button onClick={() => onOpenLesson(lesson)}>Open exercise<ArrowRight size={14} /></Button></div></article> })}</div></div>
+function Practice({ progress, authUser, onRecordAttempt }) {
+  const [activeId, setActiveId] = useState(null)
+  const [showHint, setShowHint] = useState(false)
+  const [language, setLanguage] = useState('All languages')
+  const attemptedTitles = new Set(progress.attempts.map((attempt) => attempt.title))
+  const exercises = language === 'All languages' ? practiceExercises : practiceExercises.filter((exercise) => exercise.language === language.toLowerCase())
+  const active = practiceExercises.find((exercise) => exercise.id === activeId)
+
+  useEffect(() => { setShowHint(false) }, [activeId])
+
+  if (active) return <div className="page-content workspace-page">
+    <button className="back-link" onClick={() => setActiveId(null)}><ArrowLeft size={15} />Back to practice</button>
+    <div className="workspace-heading"><div><div className="lesson-row-meta"><span>{active.topic}</span><i />{active.difficulty}<i /><Code2 size={13} />{active.language === 'html' ? 'HTML' : 'JavaScript'}</div><h1>{active.title}</h1><p>{active.prompt}</p></div><span className="lesson-state"><Target size={15} />Practice</span></div>
+    <div className="workspace-grid">
+      <section className="lesson-instructions">
+        <div className="workspace-section-title"><span className="step-number">01</span><div><span className="eyebrow">THE TASK</span><h2>What to build</h2></div></div>
+        <p className="lesson-explanation">{active.prompt}</p>
+        <div className="objective-box"><div className="objective-icon"><Target size={17} /></div><div><span>YOUR OBJECTIVE</span><strong>{active.prompt}</strong></div></div>
+        <div className="instruction-divider" />
+        <div className="workspace-section-title compact-title"><span className="step-number">02</span><div><span className="eyebrow">CHECK YOUR WORK</span><h2>Expected output</h2></div></div>
+        <p className="exercise-prompt">Run your code, compare the output, then submit your answer.</p>
+        <div className="expected-output"><span>EXPECTED OUTPUT</span><code>{active.expectedOutput.split('\n').map((line, index) => <span key={index}>{line}</span>)}</code></div>
+        <button className="example-toggle" onClick={() => setShowHint((value) => !value)}><Lightbulb size={15} />{showHint ? 'Hide hint' : 'Show hint'}<ChevronDown className={showHint ? 'rotate-icon' : ''} size={14} /></button>
+        {showHint && <pre className="example-code">{active.hint}</pre>}
+      </section>
+      <EditorWorkspace key={active.id} starterCode={active.starterCode} language={active.language} expectedOutput={active.expectedOutput} title={active.title} topic={active.topic} onRecordAttempt={onRecordAttempt} hint={active.hint} context={active} isSignedIn={Boolean(authUser)} skillLevel={progress.skillLevel} />
+    </div>
+  </div>
+
+  return <div className="page-content"><PageIntro eyebrow="RETRIEVE, APPLY, IMPROVE" title="Practice" description="Short exercises help new ideas stick. Try, check, and try again." action={<span className="learning-count"><Target size={15} />{practiceExercises.length} exercises</span>} /><div className="practice-summary"><div className="practice-summary-icon"><Award size={20} /></div><div><strong>Practice at your own pace</strong><span>These starter exercises use the same concepts as your lessons.</span></div><span className="practice-summary-count">{progress.attempts.filter((attempt) => attempt.passed).length} passed</span></div>
+    <div className="filter-row"><div className="filter-caption">FILTER <span>{language === 'All languages' ? 'All exercises' : language === 'html' ? 'HTML exercises' : 'JavaScript exercises'}</span></div><div className="filter-controls"><label className="select-wrap"><span className="sr-only">Practice language</span><select value={language} onChange={(event) => setLanguage(event.target.value)}><option>All languages</option><option value="javascript">JavaScript</option><option value="html">HTML</option></select><ChevronDown size={14} /></label></div></div>
+    <div className="exercise-grid">{exercises.map((exercise) => <article className="exercise-card" key={exercise.id}><div className="exercise-card-top"><span className="exercise-number">{exercise.language === 'html' ? 'HTML' : 'JS'}</span><span className="difficulty-tag">{exercise.difficulty}</span></div><span className="lesson-tag">{exercise.topic}</span><h2>{exercise.title}</h2><p>{exercise.prompt}</p><div className="exercise-card-footer"><span>{attemptedTitles.has(exercise.title) ? <><CheckCircle2 size={14} />Attempted</> : <><Clock3 size={14} />5 min</>}</span><Button onClick={() => setActiveId(exercise.id)}>Open exercise<ArrowRight size={14} /></Button></div></article>)}</div>
+  </div>
 }
 
 function TutorPage({ progress, currentCode, currentLesson, tutorLanguage, onMessagesChange }) {
@@ -853,12 +886,47 @@ function TutorPage({ progress, currentCode, currentLesson, tutorLanguage, onMess
 }
 
 function ProgressPage({ progress, lessons }) {
-  const total = lessons.length
-  const passed = progress.attempts.filter((attempt) => attempt.passed).length
+  const builtInLessons = lessons.filter((lesson) => !lesson.isCustom)
+  const courseStats = courseCatalog.map((course) => {
+    const courseLessons = builtInLessons.filter((lesson) => lesson.language === course.id)
+    const courseIds = new Set(courseLessons.map((lesson) => lesson.id))
+    const languageAttempts = progress.attempts.filter((attempt) => attempt.language === course.id)
+    const completed = progress.lessonsCompleted.filter((id) => courseIds.has(id)).length
+    return {
+      ...course,
+      total: courseLessons.length,
+      completed,
+      started: (progress.lessonsStarted || []).filter((id) => courseIds.has(id)).length,
+      attempted: languageAttempts.length,
+      passed: languageAttempts.filter((attempt) => attempt.passed).length,
+      percent: courseLessons.length ? Math.round((completed / courseLessons.length) * 100) : 0,
+    }
+  })
+  const totalLessons = builtInLessons.length
+  const totalCompleted = progress.lessonsCompleted.filter((id) => builtInLessons.some((lesson) => lesson.id === id)).length
+  const plan = skillLevelPlan(totalCompleted, totalLessons)
   const corrected = countCorrectedAttempts(progress.attempts)
-  const topics = [...new Set(lessons.map((lesson) => lesson.topic))]
-  const attemptsByTopic = topics.map((topic) => ({ topic, count: progress.attempts.filter((attempt) => attempt.topic === topic).length, passed: progress.attempts.filter((attempt) => attempt.topic === topic && attempt.passed).length }))
-  return <div className="page-content"><PageIntro eyebrow="NOTICE YOUR PROGRESS" title="My progress" description="A clear picture of what you have practiced and what comes next." action={<span className="learning-count"><Activity size={15} />Updated as you learn</span>} /><div className="progress-top-grid"><section className="progress-score-panel"><div className="progress-score-heading"><div><span className="eyebrow">LEARNING PATH</span><h2>JavaScript &amp; HTML foundations</h2></div><div className="progress-ring" style={{ '--progress': `${(progress.lessonsCompleted.length / total) * 100}%` }}><strong>{Math.round((progress.lessonsCompleted.length / total) * 100)}<small>%</small></strong></div></div><div className="progress-track"><span style={{ width: `${(progress.lessonsCompleted.length / total) * 100}%` }} /></div><div className="score-details"><span><CheckCircle2 size={15} />{progress.lessonsCompleted.length} lessons completed</span><span><BookOpen size={15} />{progress.lessonsStarted?.length ?? 0} lessons started</span><span><Code2 size={15} />{progress.attempts.length} exercises attempted</span><span><Award size={15} />{passed} passed</span><span><CheckCircle2 size={15} />{corrected} errors corrected</span><span><ListChecks size={15} />{progress.quizAttempts.length} knowledge checks</span></div></section><section className="progress-focus-panel"><span className="eyebrow">SKILL PROFILE</span><div className="skill-profile"><div className="skill-icon"><Target size={19} /></div><div><strong>{progress.skillLevel}</strong><span>Current learning level</span></div></div><p>Practice evidence is collected as you work. No mastery score is inferred from lesson completion alone.</p></section></div><section className="topic-progress-section"><div className="panel-heading"><div><span className="eyebrow">PRACTICE AREAS</span><h2>Topics explored</h2></div><span className="topics-caption">{topics.length} course topics</span></div><div className="topic-table"><div className="topic-table-header"><span>TOPIC</span><span>ATTEMPTS</span><span>PASSED</span><span>ACTIVITY</span></div>{attemptsByTopic.map((item) => <div className="topic-table-row" key={item.topic}><span>{item.topic}</span><span>{item.count}</span><span>{item.passed}</span><span className="topic-mini-track"><i style={{ width: item.count ? `${(item.passed / item.count) * 100}%` : '0%' }} /></span></div>)}</div></section><div className="progress-note"><Lightbulb size={17} /><p><strong>A useful next step:</strong> revisit a topic where a recent attempt needed another try. Your mistakes are part of the learning record, not a score.</p></div></div>
+  const topics = [...new Set(builtInLessons.map((lesson) => lesson.topic))]
+  const attemptsByTopic = topics.map((topic) => {
+    const lesson = builtInLessons.find((item) => item.topic === topic)
+    const topicAttempts = progress.attempts.filter((attempt) => attempt.topic === topic)
+    return { topic, language: lesson?.language === 'html' ? 'HTML' : 'JS', count: topicAttempts.length, passed: topicAttempts.filter((attempt) => attempt.passed).length }
+  })
+  const levelSteps = [['Beginner', 0], ['Intermediate', plan.intermediateAt], ['Advanced', plan.advancedAt]]
+  return <div className="page-content"><PageIntro eyebrow="NOTICE YOUR PROGRESS" title="My progress" description="A clear picture of what you have practiced and what comes next." action={<span className="learning-count"><Activity size={15} />{totalCompleted} of {totalLessons} lessons complete</span>} />
+    <div className="progress-language-grid">{courseStats.map((course) => {
+      const CourseIcon = course.icon
+      return <section className="progress-score-panel" key={course.id}>
+        <div className="progress-score-heading"><div><span className="eyebrow"><CourseIcon size={12} />{`${course.name.toUpperCase()} PATH`}</span><h2>{course.title}</h2></div><div className="progress-ring" style={{ '--progress': `${course.percent}%` }}><strong>{course.percent}<small>%</small></strong></div></div>
+        <div className="progress-track"><span style={{ width: `${course.percent}%` }} /></div>
+        <div className="score-details"><span><CheckCircle2 size={15} />{course.completed} of {course.total} lessons completed</span><span><BookOpen size={15} />{course.started} started</span><span><Code2 size={15} />{course.attempted} exercises attempted</span><span><Award size={15} />{course.passed} passed</span></div>
+      </section>
+    })}</div>
+    <div className="progress-top-grid">
+      <section className="topic-progress-section"><div className="panel-heading"><div><span className="eyebrow">PRACTICE AREAS</span><h2>Topics explored</h2></div><span className="topics-caption">{topics.length} course topics</span></div><div className="topic-table"><div className="topic-table-header"><span>TOPIC</span><span>LANGUAGE</span><span>ATTEMPTS</span><span>PASSED</span><span>ACTIVITY</span></div>{attemptsByTopic.map((item) => <div className="topic-table-row" key={item.topic}><span>{item.topic}</span><span className={`topic-language topic-language-${item.language.toLowerCase()}`}>{item.language}</span><span>{item.count}</span><span>{item.passed}</span><span className="topic-mini-track"><i style={{ width: item.count ? `${(item.passed / item.count) * 100}%` : '0%' }} /></span></div>)}</div></section>
+      <section className="progress-focus-panel"><span className="eyebrow">SKILL PROFILE</span><div className="skill-profile"><div className="skill-icon"><Target size={19} /></div><div><strong>{progress.skillLevel}</strong><span>Unlocked from lesson completion</span></div></div><div className="skill-level-steps">{levelSteps.map(([name, at]) => <span key={name} className={progress.skillLevel === name ? 'skill-step-active' : totalCompleted >= at ? 'skill-step-done' : ''}><strong>{name}</strong><small>{at ? `${at} lessons` : 'Start here'}</small></span>)}</div><p>{plan.nextLevel ? `${plan.lessonsToNext} more completed lesson${plan.lessonsToNext === 1 ? '' : 's'} to reach ${plan.nextLevel}.` : 'You have reached the highest level. Keep practicing to stay sharp.'} Levels unlock automatically: Intermediate at 15 completed lessons, Advanced at half of the built-in course.</p><div className="score-details"><span><ListChecks size={15} />{progress.quizAttempts.length} knowledge checks</span><span><CheckCircle2 size={15} />{corrected} errors corrected</span></div></section>
+    </div>
+    <div className="progress-note"><Lightbulb size={17} /><p><strong>A useful next step:</strong> revisit a topic where a recent attempt needed another try. Your mistakes are part of the learning record, not a score.</p></div></div>
 }
 
 function HistoryPage({ progress }) {
@@ -1004,7 +1072,7 @@ function SettingsPage({ progress, authUser, onSignOut, onSave }) {
             </div>
             <label className="field-label">Email address<span className="field-with-icon"><input value={authUser?.email || 'Sign in to link an email'} readOnly /><LockKeyhole size={14} /></span></label>
             <div className="settings-field-grid">
-              <label className="field-label">Role<select name="skillLevel" value={form.skillLevel} onChange={updateField}><option>Beginner</option><option>Intermediate</option><option>Advanced</option></select></label>
+              <label className="field-label">Role<span className="field-with-icon"><input value={form.skillLevel} readOnly /><Target size={14} /></span><small className="field-hint">Unlocks automatically: 15 completed lessons for Intermediate, half the course for Advanced.</small></label>
               <label className="field-label">Preferred language<select name="preferredLanguage" value={form.preferredLanguage} onChange={updateField}><option>JavaScript</option><option>HTML</option><option>HTML &amp; CSS</option><option>Python</option></select></label>
             </div>
             <label className="field-label">Country<span className="field-with-icon"><Globe size={14} /><select name="country" value={form.country} onChange={updateField}><option value="">Select your country</option>{countryOptions.map((country) => <option key={country}>{country}</option>)}</select></span></label>

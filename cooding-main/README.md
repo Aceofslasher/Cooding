@@ -75,7 +75,7 @@ npm run lint
 npm run build
 ```
 
-Tests cover progress summaries, output comparison, corrected attempts, secure endpoint defaults, and streak counting. Browser QA verified the multi-file playground, HTML lessons and references, tabbed settings, custom HTML lessons, sandboxed JavaScript output and timeout, answer submission, quiz scoring, HTML/CSS previews, theme switching, and mobile layout. Manual follow-up is still needed for Supabase auth/RLS against a configured project, provider API failure cases, Python results from a configured Judge0 host, and hosted deployment.
+Tests cover progress summaries, output comparison, corrected attempts, secure endpoint defaults, streak counting, automatic skill-level thresholds, and the built-in curriculum. Browser QA verified the multi-file playground, HTML lessons and references, tabbed settings, custom HTML lessons, sandboxed JavaScript output and timeout, answer submission, quiz scoring, HTML/CSS previews, theme switching, and mobile layout. Manual follow-up is still needed for Supabase auth/RLS against a configured project, provider API failure cases, Python results from a configured Judge0 host, and hosted deployment.
 
 ## Deploy to Vercel
 
