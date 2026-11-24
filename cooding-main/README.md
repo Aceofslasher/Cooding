@@ -50,13 +50,16 @@ Current cloud sync persists the profile, lesson status, coding-attempt records, 
 
 Set these as **server-side** environment variables in Vercel or in the local environment used by `vercel dev`:
 
-- `AI_API_KEY`: provider secret. The endpoint expects an OpenAI-compatible `/chat/completions` API.
-- `AI_BASE_URL`: API base URL, defaulting to `https://api.openai.com/v1`.
+- `AI_API_KEY`: provider secret. The endpoint expects an OpenAI-compatible `/chat/completions` API, or Gemini's native `generateContent` API.
+- `AI_BASE_URL`: API base URL, defaulting to `https://api.openai.com/v1`. When it points at `generativelanguage.googleapis.com`, the tutor automatically uses Gemini's native endpoint with the `x-goog-api-key` header, which is required for newer AI Studio `AQ.` keys.
+- `AI_GEMINI_NATIVE`: set to `true` to force Gemini's native endpoint even when `AI_BASE_URL` is a custom proxy.
 - `AI_MODEL`: model name, defaulting to `gpt-4o-mini`.
 - `JUDGE0_URL`: Judge0-compatible API base URL.
 - `SUPABASE_URL` and `SUPABASE_ANON_KEY`: server-side values used to validate access tokens before serverless requests. The browser also needs the matching `VITE_` values for sign-in.
 - `JUDGE0_API_KEY`: Judge0 server credential.
 - `JUDGE0_AUTH_HEADER`: authentication header name, default `X-Auth-Token` (RapidAPI hosts commonly use `X-RapidAPI-Key`).
+
+Verify the AI credential before starting the app: `npm run check:ai` reads `.env.local`, calls the provider's model list with the same auth the tutor uses, and reports whether the key and `AI_MODEL` are valid.
 
 The browser only calls `/api/tutor` and `/api/execute`; provider secrets are not prefixed with `VITE_` and are never sent to client code. Hosted endpoints fail closed without Supabase token verification, limit request sizes, and apply per-instance rate limits. For a public deployment, use a shared rate-limit store/API gateway as serverless instance memory is not a global quota.
 

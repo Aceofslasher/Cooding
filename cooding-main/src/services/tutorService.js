@@ -39,6 +39,10 @@ export async function askTutor(payload) {
     })
     const data = await response.json().catch(() => null)
     if (!response.ok) {
+      // Plain `vite` dev cannot serve /api/*; use the local tutor unless `vercel dev` is running.
+      if (import.meta.env.DEV && response.status === 404) {
+        return { reply: localTutorReply(payload), mode: 'demo' }
+      }
       const message = data && typeof data.error === 'string'
         ? data.error
         : `Tutor endpoint returned HTTP ${response.status}.`

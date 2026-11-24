@@ -52,5 +52,5 @@ app.post("/api/gemini", async (req, res) => {
 });
 
 app.listen(PORT, () => {
-  console.log(Loopwise AI backend running at http://localhost:${PORT});
+  console.log(`Loopwise AI backend running at http://localhost:${PORT}`);
 });

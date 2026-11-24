@@ -442,8 +442,12 @@ function EditorWorkspace({ starterCode, language, expectedOutput, title, topic, 
           headers: { 'Content-Type': 'application/json', ...authHeaders },
           body: JSON.stringify({ sourceCode: code }),
         })
-        const result = await response.json()
-        if (!response.ok) throw new Error(result.error || 'Python execution is unavailable.')
+        const result = await response.json().catch(() => null)
+        if (!response.ok) {
+          throw new Error(result?.error || (response.status === 404
+            ? 'Python needs the configured Judge0 endpoint. Run `npx vercel dev` to use serverless functions.'
+            : `Python execution is unavailable (HTTP ${response.status}).`))
+        }
         setOutput(result.error ? `${result.error}\n${result.output}`.trim() : result.output || '(No output)')
         setRunStatus(result.status === 'success' ? 'success' : 'error')
         setExecutionStatus(result.status)

@@ -63,6 +63,7 @@ const lessonIds = {
   performance: 'c6231034-0705-42ed-872a-bad7c0080a60',
 }
 const lessonSlugs = Object.fromEntries(Object.entries(lessonIds).map(([slug, id]) => [id, slug]))
+const languageLabels = { javascript: 'JavaScript', python: 'Python', 'html & css': 'HTML & CSS' }
 
 export async function loadCloudProgress(userId) {
   if (!supabase) return null
@@ -79,7 +80,7 @@ export async function loadCloudProgress(userId) {
   return {
     displayName: profileResult.data?.display_name || 'Learner',
     skillLevel: profileResult.data?.skill_level ? profileResult.data.skill_level[0].toUpperCase() + profileResult.data.skill_level.slice(1) : 'Beginner',
-    preferredLanguage: profileResult.data?.preferred_language || 'JavaScript',
+    preferredLanguage: languageLabels[profileResult.data?.preferred_language?.toLowerCase()] || 'JavaScript',
     lessonsStarted: lessonRows.map((row) => lessonSlugs[row.lesson_id] || row.lesson_id),
     lessonsCompleted: lessonRows.filter((row) => row.status === 'completed').map((row) => lessonSlugs[row.lesson_id] || row.lesson_id),
     attempts: (attemptResult.data ?? []).map((row) => ({
