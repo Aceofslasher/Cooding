@@ -37,11 +37,19 @@ export async function askTutor(payload) {
       headers: { 'Content-Type': 'application/json', ...authHeaders },
       body: JSON.stringify(payload),
     })
-    if (!response.ok) throw new Error('Tutor endpoint unavailable')
-    const data = await response.json()
-    if (typeof data.reply !== 'string' || !data.reply.trim()) throw new Error('Tutor returned an empty reply')
+    const data = await response.json().catch(() => null)
+    if (!response.ok) {
+      const message = data && typeof data.error === 'string'
+        ? data.error
+        : `Tutor endpoint returned HTTP ${response.status}.`
+      throw new Error(message)
+    }
+    if (!data || typeof data.reply !== 'string' || !data.reply.trim()) throw new Error('Tutor returned an empty or invalid reply')
     return { reply: data.reply, mode: 'ai' }
-  } catch {
-    return { reply: localTutorReply(payload), mode: 'demo' }
+  } catch (error) {
+    const message = error instanceof Error && error.message
+      ? error.message
+      : 'An unexpected error occurred.'
+    return { reply: `Tutor connection error: ${message}`, mode: 'error' }
   }
 }
