@@ -71,7 +71,18 @@ export default async function handler(request, response) {
       }),
       signal: AbortSignal.timeout(20_000),
     })
-    if (!upstream.ok) return response.status(502).json({ error: 'The AI provider could not complete this request.' })
+    if (!upstream.ok) {
+      const hint = upstream.status === 401 || upstream.status === 403
+        ? 'Check the API key and whether it can access this model.'
+        : upstream.status === 404
+          ? 'Check AI_BASE_URL and AI_MODEL.'
+          : upstream.status === 429
+            ? 'The provider quota or rate limit may have been reached.'
+            : 'Check the AI provider settings and try again.'
+      return response.status(502).json({
+        error: `The AI provider returned HTTP ${upstream.status}. ${hint}`,
+      })
+    }
     const data = await upstream.json()
     const reply = data.choices?.[0]?.message?.content
     if (typeof reply !== 'string' || !reply.trim()) return response.status(502).json({ error: 'The AI provider returned an empty reply.' })
