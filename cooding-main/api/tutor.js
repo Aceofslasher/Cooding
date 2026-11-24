@@ -60,7 +60,7 @@ export default async function handler(request, response) {
       method: 'POST',
       headers: { Authorization: `Bearer ${process.env.AI_API_KEY}`, 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        model: process.env.AI_MODEL || 'gpt-4o-mini',
+        model: process.env.AI_MODEL || 'gemini-4-hydrogen',
         temperature: 0.4,
         max_tokens: 700,
         messages: [
