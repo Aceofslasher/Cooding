@@ -2,6 +2,9 @@
   "functions": {
     "api/tutor.js": {
       "maxDuration": 30
+    },
+    "api/generate-lesson.js": {
+      "maxDuration": 30
     }
   },
   "headers": [

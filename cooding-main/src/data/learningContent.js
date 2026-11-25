@@ -1047,19 +1047,62 @@ export const lessonQuizzes = {
 }
 
 export const practiceExercises = [
-  { id: 'practice-greeting', lessonId: 'variables', title: 'Personal greeting', difficulty: 'Easy', language: 'javascript', topic: 'Variables', prompt: 'Create a variable named learner with the value "Maya" and print Hello, Maya!', starterCode: '// 1. Create the learner variable\n// 2. Print the greeting\n', expectedOutput: 'Hello, Maya!', hint: 'Declare `const learner = "Maya"` and print `"Hello, " + learner + "!"`.' },
-  { id: 'practice-score', lessonId: 'conditionals', title: 'Pass or retry', difficulty: 'Easy', language: 'javascript', topic: 'Conditionals', prompt: 'Use an if/else statement to print You passed! for a score of 82.', starterCode: 'const score = 82\n// Print "You passed!" when the score is 60 or more, otherwise "Try again"\n', expectedOutput: 'You passed!', hint: 'Compare `score >= 60` inside an if statement.' },
-  { id: 'practice-count', lessonId: 'loops', title: 'Count to three', difficulty: 'Easy', language: 'javascript', topic: 'Loops', prompt: 'Use a loop to print 1, 2, and 3 on separate lines.', starterCode: '// Use a for loop that starts at 1 and ends at 3\n', expectedOutput: '1\n2\n3', hint: '`for (let i = 1; i <= 3; i++)` and log `i` each time.' },
-  { id: 'practice-add', lessonId: 'functions', title: 'Add two numbers', difficulty: 'Easy', language: 'javascript', topic: 'Functions', prompt: 'Write a function named add that returns the sum of two numbers, then print add(3, 4).', starterCode: '// Define add(a, b) and print the result of add(3, 4)\n', expectedOutput: '7', hint: 'Return `a + b` from the function and log the call.' },
-  { id: 'practice-array-total', lessonId: 'arrays', title: 'Total the list', difficulty: 'Easy', language: 'javascript', topic: 'Arrays', prompt: 'Add up every number in [4, 6, 10] and print the total.', starterCode: 'const numbers = [4, 6, 10]\n// Add the numbers together and print the total\n', expectedOutput: '20', hint: 'Start a total at 0 and add each number in a loop.' },
-  { id: 'practice-book-object', lessonId: 'objects', title: 'Read a property', difficulty: 'Easy', language: 'javascript', topic: 'Objects', prompt: 'Create an object named book with a title property set to "JS Basics" and print book.title.', starterCode: '// Create the book object, then print its title\n', expectedOutput: 'JS Basics', hint: 'Object properties use `key: value` pairs inside `{ }`.' },
-  { id: 'practice-template', lessonId: 'template-literals', title: 'Fill in the sentence', difficulty: 'Medium', language: 'javascript', topic: 'Template literals', prompt: 'Using name = "Maya" and score = 9, print Maya scored 9 points.', starterCode: "const name = 'Maya'\nconst score = 9\n// Print the sentence with a template literal\n", expectedOutput: 'Maya scored 9 points.', hint: 'Template literals use backticks and `${expression}`.' },
-  { id: 'practice-double', lessonId: 'array-methods', title: 'Double the values', difficulty: 'Medium', language: 'javascript', topic: 'Array methods', prompt: 'Use map to double [1, 2, 3] and print the joined result as 2, 4, 6.', starterCode: 'const numbers = [1, 2, 3]\n// Double each value with map, then join with ", "\n', expectedOutput: '2, 4, 6', hint: '`numbers.map((number) => number * 2).join(", ")`' },
-  { id: 'practice-uppercase', lessonId: 'string-methods', title: 'Shout it back', difficulty: 'Easy', language: 'javascript', topic: 'String methods', prompt: 'Take the word "loopwise" and print it in uppercase.', starterCode: "const word = 'loopwise'\n// Print the word in uppercase\n", expectedOutput: 'LOOPWISE', hint: 'Strings have a `toUpperCase()` method.' },
-  { id: 'practice-weekend', lessonId: 'switch', title: 'Weekend checker', difficulty: 'Medium', language: 'javascript', topic: 'Switch', prompt: 'Use a switch statement on day = "sat" to print Weekend. Treat "sat" and "sun" the same.', starterCode: "const day = 'sat'\n// Use switch to print \"Weekend\" for sat or sun\n", expectedOutput: 'Weekend', hint: 'Combine cases with `case "sat": case "sun":` before the matching code.' },
-  { id: 'practice-html-heading', lessonId: 'html-headings', title: 'Add a page heading', difficulty: 'Easy', language: 'html', topic: 'HTML Text', prompt: 'Add an h1 element that says Welcome to Loopwise.', starterCode: '<h1></h1>\n', expectedOutput: 'Welcome to Loopwise', hint: 'Put the text inside the `<h1>` element: `<h1>Welcome to Loopwise</h1>`.' },
-  { id: 'practice-html-list', lessonId: 'html-lists', title: 'Write a shopping list', difficulty: 'Easy', language: 'html', topic: 'HTML Basics', prompt: 'Create an unordered list with two items: Apple and Bread.', starterCode: '<!-- Add a <ul> with two <li> items -->\n', expectedOutput: 'Apple Bread', hint: 'Wrap two `<li>` elements inside a `<ul>`.' },
-  { id: 'practice-html-link', lessonId: 'html-links', title: 'Link to W3Schools', difficulty: 'Medium', language: 'html', topic: 'HTML Links', prompt: 'Create a link to https://www.w3schools.com with the visible text W3Schools.', starterCode: '<!-- Add an anchor element -->\n', expectedOutput: 'W3Schools', hint: 'An anchor looks like `<a href="https://www.w3schools.com">W3Schools</a>`.' },
+  { id: 'practice-greeting', lessonId: 'variables', title: 'Personal greeting', difficulty: 'Easy', language: 'javascript', topic: 'Variables', prompt: 'Create a variable named learner with the value "Maya" and print Hello, Maya!', starterCode: '// 1. Create the learner variable\n// 2. Print the greeting\n', expectedOutput: 'Hello, Maya!', hint: 'Declare `const learner = "Maya"` and print `"Hello, " + learner + "!"`.', testCases: [
+    { description: 'Prints the greeting exactly', expectedOutput: 'Hello, Maya!', mode: 'exact' },
+    { description: 'Uses the learner name Maya', expectedOutput: 'Maya', mode: 'includes' },
+    { description: 'Ends with an exclamation mark', expectedOutput: '!', mode: 'includes' },
+  ] },
+  { id: 'practice-score', lessonId: 'conditionals', title: 'Pass or retry', difficulty: 'Easy', language: 'javascript', topic: 'Conditionals', prompt: 'Use an if/else statement to print You passed! for a score of 82.', starterCode: 'const score = 82\n// Print "You passed!" when the score is 60 or more, otherwise "Try again"\n', expectedOutput: 'You passed!', hint: 'Compare `score >= 60` inside an if statement.', testCases: [
+    { description: 'Prints the passing message', expectedOutput: 'You passed!', mode: 'exact' },
+    { description: 'Uses the word passed', expectedOutput: 'passed', mode: 'includes' },
+  ] },
+  { id: 'practice-count', lessonId: 'loops', title: 'Count to three', difficulty: 'Easy', language: 'javascript', topic: 'Loops', prompt: 'Use a loop to print 1, 2, and 3 on separate lines.', starterCode: '// Use a for loop that starts at 1 and ends at 3\n', expectedOutput: '1\n2\n3', hint: '`for (let i = 1; i <= 3; i++)` and log `i` each time.', testCases: [
+    { description: 'Prints the full sequence', expectedOutput: '1\n2\n3', mode: 'exact' },
+    { description: 'Prints 1 on its own line', expectedOutput: '1', mode: 'line' },
+    { description: 'Prints 2 on its own line', expectedOutput: '2', mode: 'line' },
+    { description: 'Prints 3 on its own line', expectedOutput: '3', mode: 'line' },
+  ] },
+  { id: 'practice-add', lessonId: 'functions', title: 'Add two numbers', difficulty: 'Easy', language: 'javascript', topic: 'Functions', prompt: 'Write a function named add that returns the sum of two numbers, then print add(3, 4).', starterCode: '// Define add(a, b) and print the result of add(3, 4)\n', expectedOutput: '7', hint: 'Return `a + b` from the function and log the call.', testCases: [
+    { description: 'Prints 7', expectedOutput: '7', mode: 'exact' },
+    { description: 'Prints 7 on its own line', expectedOutput: '7', mode: 'line' },
+  ] },
+  { id: 'practice-array-total', lessonId: 'arrays', title: 'Total the list', difficulty: 'Easy', language: 'javascript', topic: 'Arrays', prompt: 'Add up every number in [4, 6, 10] and print the total.', starterCode: 'const numbers = [4, 6, 10]\n// Add the numbers together and print the total\n', expectedOutput: '20', hint: 'Start a total at 0 and add each number in a loop.', testCases: [
+    { description: 'Prints the total 20', expectedOutput: '20', mode: 'exact' },
+    { description: 'Prints 20 on its own line', expectedOutput: '20', mode: 'line' },
+  ] },
+  { id: 'practice-book-object', lessonId: 'objects', title: 'Read a property', difficulty: 'Easy', language: 'javascript', topic: 'Objects', prompt: 'Create an object named book with a title property set to "JS Basics" and print book.title.', starterCode: '// Create the book object, then print its title\n', expectedOutput: 'JS Basics', hint: 'Object properties use `key: value` pairs inside `{ }`.', testCases: [
+    { description: 'Prints the book title', expectedOutput: 'JS Basics', mode: 'exact' },
+    { description: 'Prints the text JS Basics', expectedOutput: 'JS Basics', mode: 'includes' },
+  ] },
+  { id: 'practice-template', lessonId: 'template-literals', title: 'Fill in the sentence', difficulty: 'Medium', language: 'javascript', topic: 'Template literals', prompt: 'Using name = "Maya" and score = 9, print Maya scored 9 points.', starterCode: "const name = 'Maya'\nconst score = 9\n// Print the sentence with a template literal\n", expectedOutput: 'Maya scored 9 points.', hint: 'Template literals use backticks and `${expression}`.', testCases: [
+    { description: 'Prints the complete sentence', expectedOutput: 'Maya scored 9 points.', mode: 'exact' },
+    { description: 'Includes the name and score', expectedOutput: 'Maya scored 9', mode: 'includes' },
+  ] },
+  { id: 'practice-double', lessonId: 'array-methods', title: 'Double the values', difficulty: 'Medium', language: 'javascript', topic: 'Array methods', prompt: 'Use map to double [1, 2, 3] and print the joined result as 2, 4, 6.', starterCode: 'const numbers = [1, 2, 3]\n// Double each value with map, then join with ", "\n', expectedOutput: '2, 4, 6', hint: '`numbers.map((number) => number * 2).join(", ")`', testCases: [
+    { description: 'Prints the doubled values', expectedOutput: '2, 4, 6', mode: 'exact' },
+    { description: 'Prints 2, 4, 6 on its own line', expectedOutput: '2, 4, 6', mode: 'line' },
+  ] },
+  { id: 'practice-uppercase', lessonId: 'string-methods', title: 'Shout it back', difficulty: 'Easy', language: 'javascript', topic: 'String methods', prompt: 'Take the word "loopwise" and print it in uppercase.', starterCode: "const word = 'loopwise'\n// Print the word in uppercase\n", expectedOutput: 'LOOPWISE', hint: 'Strings have a `toUpperCase()` method.', testCases: [
+    { description: 'Prints LOOPWISE', expectedOutput: 'LOOPWISE', mode: 'exact' },
+    { description: 'Prints LOOPWISE on its own line', expectedOutput: 'LOOPWISE', mode: 'line' },
+  ] },
+  { id: 'practice-weekend', lessonId: 'switch', title: 'Weekend checker', difficulty: 'Medium', language: 'javascript', topic: 'Switch', prompt: 'Use a switch statement on day = "sat" to print Weekend. Treat "sat" and "sun" the same.', starterCode: "const day = 'sat'\n// Use switch to print \"Weekend\" for sat or sun\n", expectedOutput: 'Weekend', hint: 'Combine cases with `case "sat": case "sun":` before the matching code.', testCases: [
+    { description: 'Prints Weekend', expectedOutput: 'Weekend', mode: 'exact' },
+    { description: 'Prints Weekend on its own line', expectedOutput: 'Weekend', mode: 'line' },
+  ] },
+  { id: 'practice-html-heading', lessonId: 'html-headings', title: 'Add a page heading', difficulty: 'Easy', language: 'html', topic: 'HTML Text', prompt: 'Add an h1 element that says Welcome to Loopwise.', starterCode: '<h1></h1>\n', expectedOutput: 'Welcome to Loopwise', hint: 'Put the text inside the `<h1>` element: `<h1>Welcome to Loopwise</h1>`.', testCases: [
+    { description: 'The heading shows the welcome text', expectedOutput: 'Welcome to Loopwise', mode: 'exact' },
+    { description: 'The heading mentions Loopwise', expectedOutput: 'Loopwise', mode: 'includes' },
+  ] },
+  { id: 'practice-html-list', lessonId: 'html-lists', title: 'Write a shopping list', difficulty: 'Easy', language: 'html', topic: 'HTML Basics', prompt: 'Create an unordered list with two items: Apple and Bread.', starterCode: '<!-- Add a <ul> with two <li> items -->\n', expectedOutput: 'Apple Bread', hint: 'Wrap two `<li>` elements inside a `<ul>`.', testCases: [
+    { description: 'Shows both list items in order', expectedOutput: 'Apple Bread', mode: 'exact' },
+    { description: 'Includes Apple', expectedOutput: 'Apple', mode: 'includes' },
+    { description: 'Includes Bread', expectedOutput: 'Bread', mode: 'includes' },
+  ] },
+  { id: 'practice-html-link', lessonId: 'html-links', title: 'Link to W3Schools', difficulty: 'Medium', language: 'html', topic: 'HTML Links', prompt: 'Create a link to https://www.w3schools.com with the visible text W3Schools.', starterCode: '<!-- Add an anchor element -->\n', expectedOutput: 'W3Schools', hint: 'An anchor looks like `<a href="https://www.w3schools.com">W3Schools</a>`.', testCases: [
+    { description: 'The link shows the W3Schools text', expectedOutput: 'W3Schools', mode: 'exact' },
+    { description: 'Includes W3Schools', expectedOutput: 'W3Schools', mode: 'includes' },
+  ] },
 ]
 
 export const emptyProgress = {
@@ -1067,6 +1110,7 @@ export const emptyProgress = {
   lessonsCompleted: [],
   lessonStartedAt: {},
   lessonCompletedAt: {},
+  lessonTimeSpent: {},
   attempts: [],
   quizAttempts: [],
   errorHistory: [],

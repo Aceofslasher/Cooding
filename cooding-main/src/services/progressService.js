@@ -1,4 +1,5 @@
 import { supabase } from './supabase'
+import { attemptScore, errorTypeFor } from '../utils/attempts.js'
 
 const lessonIds = {
   variables: 'c6231034-0705-42ed-872a-bad7c0080a01',
@@ -76,15 +77,28 @@ const lessonIds = {
 }
 const lessonSlugs = Object.fromEntries(Object.entries(lessonIds).map(([slug, id]) => [id, slug]))
 const languageLabels = { javascript: 'JavaScript', python: 'Python', 'html & css': 'HTML & CSS', html: 'HTML' }
+const MIGRATION_FILE = 'supabase/migrations/202611260001_learning_data_foundation.sql'
+
+export function surfaceSyncError(error) {
+  if (!error) return error
+  const message = typeof error.message === 'string' ? error.message : ''
+  const missingColumn = error.code === 'PGRST204'
+    || error.code === '42703'
+    || /could not find the '.+' column/i.test(message)
+    || /column .+ does not exist/i.test(message)
+  return missingColumn
+    ? new Error(`Your Supabase schema is missing the learning-data columns. Run ${MIGRATION_FILE} in the Supabase SQL editor, then try again.`)
+    : error
+}
 
 export async function loadCloudProgress(userId) {
   if (!supabase) return null
   const [profileResult, lessonResult, attemptResult, quizResult, errorResult] = await Promise.all([
     supabase.from('profiles').select('*').eq('id', userId).maybeSingle(),
-    supabase.from('lesson_progress').select('lesson_id, status, started_at, completed_at').eq('user_id', userId),
-    supabase.from('coding_attempts').select('id, exercise_title, topic, programming_language, execution_status, passed_tests, feedback, created_at').eq('user_id', userId).order('created_at', { ascending: false }).limit(100),
-    supabase.from('quiz_attempts').select('id, lesson_id, score, total_questions, completed_at').eq('user_id', userId).order('completed_at', { ascending: false }).limit(100),
-    supabase.from('error_history').select('id, coding_attempt_id, topic, error_type, error_message, resolved, correction_summary, created_at').eq('user_id', userId).order('created_at', { ascending: false }).limit(150),
+    supabase.from('lesson_progress').select('*').eq('user_id', userId),
+    supabase.from('coding_attempts').select('*').eq('user_id', userId).order('created_at', { ascending: false }).limit(100),
+    supabase.from('quiz_attempts').select('*').eq('user_id', userId).order('completed_at', { ascending: false }).limit(100),
+    supabase.from('error_history').select('*').eq('user_id', userId).order('created_at', { ascending: false }).limit(150),
   ])
   for (const result of [profileResult, lessonResult, attemptResult, quizResult, errorResult]) {
     if (result.error) throw result.error
@@ -93,10 +107,12 @@ export async function loadCloudProgress(userId) {
   const profile = profileResult.data ?? {}
   const lessonStartedAt = {}
   const lessonCompletedAt = {}
+  const lessonTimeSpent = {}
   for (const row of lessonRows) {
     const slug = lessonSlugs[row.lesson_id] || row.lesson_id
     if (row.started_at) lessonStartedAt[slug] = row.started_at
     if (row.completed_at) lessonCompletedAt[slug] = row.completed_at
+    if (row.time_spent_seconds) lessonTimeSpent[slug] = row.time_spent_seconds
   }
   return {
     displayName: profile.display_name || 'Learner',
@@ -109,15 +125,24 @@ export async function loadCloudProgress(userId) {
     lessonsCompleted: lessonRows.filter((row) => row.status === 'completed').map((row) => lessonSlugs[row.lesson_id] || row.lesson_id),
     lessonStartedAt,
     lessonCompletedAt,
+    lessonTimeSpent,
     errorHistory: (errorResult.data ?? []).map((row) => ({
       id: row.id,
       attemptId: row.coding_attempt_id,
       topic: row.topic || 'General practice',
       errorType: row.error_type,
       errorMessage: row.error_message,
+      language: row.language || '',
+      lessonRef: row.lesson_ref || '',
+      exerciseRef: row.exercise_ref || '',
+      codeExcerpt: row.code_excerpt || '',
+      suggestedFix: row.suggested_fix || '',
+      aiExplanation: row.ai_explanation || '',
+      occurrences: Number(row.occurrences) || 1,
       correctionSummary: row.correction_summary || '',
       resolved: row.resolved,
       createdAt: row.created_at,
+      lastSeenAt: row.last_seen_at || row.created_at,
     })),
     attempts: (attemptResult.data ?? []).map((row) => ({
       id: row.id,
@@ -127,6 +152,14 @@ export async function loadCloudProgress(userId) {
       executionStatus: row.execution_status,
       passed: row.execution_status === 'accepted',
       output: row.feedback || '',
+      code: row.submitted_code || '',
+      exerciseId: row.exercise_ref || null,
+      lessonId: row.lesson_ref || null,
+      durationSeconds: row.duration_seconds ?? null,
+      hintsUsed: Number(row.hints_used) || 0,
+      passedTests: Number(row.passed_tests) || 0,
+      totalTests: Number(row.total_tests) || 0,
+      testResults: Array.isArray(row.test_results) ? row.test_results : [],
       createdAt: row.created_at,
     })),
     quizAttempts: (quizResult.data ?? []).map((row) => ({
@@ -143,6 +176,11 @@ export async function saveCloudAttempt(userId, attempt) {
   if (!supabase) return
   const executionStatuses = ['accepted', 'wrong_answer', 'compile_error', 'runtime_error', 'time_limit', 'infrastructure_error']
   const executionStatus = attempt.passed ? 'accepted' : executionStatuses.includes(attempt.executionStatus) ? attempt.executionStatus : 'wrong_answer'
+  const score = attemptScore(attempt)
+  const totalTests = score.total || 1
+  const passedTests = attempt.passed ? totalTests : Math.min(score.passed, totalTests)
+  const exerciseRef = attempt.exerciseId?.slice(0, 120) || null
+  const lessonRef = attempt.lessonId?.slice(0, 120) || null
   const { data: savedAttempt, error } = await supabase.from('coding_attempts').insert({
     user_id: userId,
     exercise_title: attempt.title,
@@ -150,44 +188,109 @@ export async function saveCloudAttempt(userId, attempt) {
     submitted_code: attempt.code || '',
     programming_language: attempt.language || 'javascript',
     execution_status: executionStatus,
-    passed_tests: attempt.passed ? 1 : 0,
-    total_tests: 1,
+    passed_tests: passedTests,
+    total_tests: totalTests,
     feedback: attempt.output || null,
+    exercise_ref: exerciseRef,
+    lesson_ref: lessonRef,
+    duration_seconds: Number.isFinite(Number(attempt.durationSeconds)) ? Math.max(0, Math.round(Number(attempt.durationSeconds))) : null,
+    hints_used: Number(attempt.hintsUsed) || 0,
+    test_results: Array.isArray(attempt.testResults) ? attempt.testResults : [],
   }).select('id').single()
-  if (error) throw error
-  if (attempt.passed && attempt.topic) {
-    const { error: resolveError } = await supabase.from('error_history').update({ resolved: true, correction_summary: 'A later attempt for this topic passed.' }).eq('user_id', userId).eq('topic', attempt.topic).eq('resolved', false)
-    if (resolveError) throw resolveError
+  if (error) throw surfaceSyncError(error)
+
+  if (attempt.passed && (exerciseRef || lessonRef || attempt.topic)) {
+    const now = new Date().toISOString()
+    let resolveQuery = supabase.from('error_history')
+      .update({ resolved: true, correction_summary: 'A later attempt for this exercise passed.', last_seen_at: now })
+      .eq('user_id', userId)
+      .eq('resolved', false)
+    if (exerciseRef) resolveQuery = resolveQuery.eq('exercise_ref', exerciseRef)
+    else if (lessonRef) resolveQuery = resolveQuery.eq('lesson_ref', lessonRef)
+    else resolveQuery = resolveQuery.is('exercise_ref', null).is('lesson_ref', null).eq('topic', attempt.topic)
+    const { error: resolveError } = await resolveQuery
+    if (resolveError) throw surfaceSyncError(resolveError)
+    if (attempt.topic && (exerciseRef || lessonRef)) {
+      const { error: legacyResolveError } = await supabase.from('error_history')
+        .update({ resolved: true, correction_summary: 'A later attempt for this topic passed.', last_seen_at: now })
+        .eq('user_id', userId)
+        .eq('resolved', false)
+        .is('exercise_ref', null)
+        .is('lesson_ref', null)
+        .eq('topic', attempt.topic)
+      if (legacyResolveError) throw surfaceSyncError(legacyResolveError)
+    }
   }
-  if (!attempt.passed && (['compile_error', 'runtime_error', 'time_limit'].includes(executionStatus) || executionStatus === 'wrong_answer')) {
-    const { error: historyError } = await supabase.from('error_history').insert({
+
+  if (!attempt.passed && (['compile_error', 'runtime_error', 'time_limit', 'wrong_answer', 'incorrect_output'].includes(executionStatus) || executionStatus === 'wrong_answer')) {
+    const errorType = errorTypeFor(executionStatus)
+    const errorMessage = attempt.output || 'The program ran, but its output did not match the exercise requirement.'
+    let existingQuery = supabase.from('error_history')
+      .select('id, occurrences')
+      .eq('user_id', userId)
+      .eq('error_type', errorType)
+      .eq('resolved', false)
+      .limit(1)
+    if (exerciseRef) existingQuery = existingQuery.eq('exercise_ref', exerciseRef)
+    else if (lessonRef) existingQuery = existingQuery.eq('lesson_ref', lessonRef)
+    else if (attempt.topic) existingQuery = existingQuery.eq('topic', attempt.topic)
+    const { data: existing, error: lookupError } = await existingQuery.maybeSingle()
+    if (lookupError) throw surfaceSyncError(lookupError)
+    const detail = {
       user_id: userId,
       coding_attempt_id: savedAttempt.id,
       topic: attempt.topic || null,
-      error_type: executionStatus === 'wrong_answer' ? 'incorrect_output' : executionStatus,
-      error_message: attempt.output || 'The program ran, but its output did not match the exercise requirement.',
-      resolved: false,
-    })
-    if (historyError) throw historyError
+      error_type: errorType,
+      error_message: errorMessage,
+      language: attempt.language || null,
+      lesson_ref: lessonRef,
+      exercise_ref: exerciseRef,
+      code_excerpt: attempt.code?.slice(0, 4000) || null,
+      last_seen_at: new Date().toISOString(),
+    }
+    const result = existing
+      ? await supabase.from('error_history').update({
+          ...detail,
+          occurrences: (Number(existing.occurrences) || 1) + 1,
+        }).eq('id', existing.id)
+      : await supabase.from('error_history').insert({ ...detail, occurrences: 1, resolved: false })
+    if (result.error) throw surfaceSyncError(result.error)
   }
 }
 
-export async function saveCloudLessonProgress(userId, lessonId, status) {
+export async function saveCloudLessonProgress(userId, lessonId, status, durationSeconds = 0) {
   if (!supabase) return
-  const row = { user_id: userId, lesson_id: lessonIds[lessonId] || lessonId, status }
-  if (status === 'started') {
-    const { error } = await supabase.from('lesson_progress').upsert(row, { onConflict: 'user_id,lesson_id', ignoreDuplicates: true })
-    if (error) throw error
+  const dbLessonId = lessonIds[lessonId]
+  if (!dbLessonId) return
+  const now = new Date().toISOString()
+  const { data: existing, error: lookupError } = await supabase
+    .from('lesson_progress')
+    .select('id, completed_at, time_spent_seconds')
+    .eq('user_id', userId)
+    .eq('lesson_id', dbLessonId)
+    .maybeSingle()
+  if (lookupError) throw surfaceSyncError(lookupError)
+  if (!existing) {
+    const { error } = await supabase.from('lesson_progress').insert({
+      user_id: userId,
+      lesson_id: dbLessonId,
+      status,
+      started_at: now,
+      completed_at: status === 'completed' ? now : null,
+      last_opened_at: now,
+      time_spent_seconds: status === 'completed' ? Math.max(0, Math.round(durationSeconds)) : 0,
+    })
+    if (error) throw surfaceSyncError(error)
     return
   }
-  row.completed_at = new Date().toISOString()
-  const { data: existing, error: lookupError } = await supabase.from('lesson_progress').select('id, completed_at').eq('user_id', userId).eq('lesson_id', row.lesson_id).maybeSingle()
-  if (lookupError) throw lookupError
-  const result = existing
-    ? await supabase.from('lesson_progress').update({ status, completed_at: existing.completed_at || row.completed_at }).eq('id', existing.id)
-    : await supabase.from('lesson_progress').insert(row)
-  const { error } = result
-  if (error) throw error
+  const update = { last_opened_at: now }
+  if (status === 'completed') {
+    update.status = 'completed'
+    update.completed_at = existing.completed_at || now
+    update.time_spent_seconds = (Number(existing.time_spent_seconds) || 0) + Math.max(0, Math.round(durationSeconds))
+  }
+  const { error } = await supabase.from('lesson_progress').update(update).eq('id', existing.id)
+  if (error) throw surfaceSyncError(error)
 }
 
 export async function saveCloudProfile(userId, profile) {
@@ -216,11 +319,13 @@ export async function saveCloudProfile(userId, profile) {
 
 export async function saveCloudQuizAttempt(userId, attempt) {
   if (!supabase) return
+  const dbLessonId = lessonIds[attempt.lessonId]
+  if (!dbLessonId) return
   const { error } = await supabase.from('quiz_attempts').insert({
     user_id: userId,
-    lesson_id: lessonIds[attempt.lessonId] || attempt.lessonId,
+    lesson_id: dbLessonId,
     score: attempt.score,
     total_questions: attempt.totalQuestions,
   })
-  if (error) throw error
+  if (error) throw surfaceSyncError(error)
 }

@@ -16,6 +16,11 @@ function lessonFromRow(row) {
     expectedOutput: row.expected_output,
     hint: row.hint,
     referenceUrl: row.reference_url || '',
+    status: row.status || 'published',
+    objectives: Array.isArray(row.objectives) ? row.objectives : [],
+    quiz: row.quiz || null,
+    testCases: Array.isArray(row.test_cases) ? row.test_cases : [],
+    hints: Array.isArray(row.hints) ? row.hints : [],
     isCustom: true,
     author: row.owner_name || 'Learner',
     ownerId: row.owner_id,
@@ -26,7 +31,8 @@ export async function loadSharedCustomLessons() {
   if (!supabase) return []
   const { data, error } = await supabase
     .from('custom_lessons')
-    .select('id, owner_id, owner_name, title, topic, level, minutes, language, description, objective, explanation, example, starter_code, expected_output, hint, reference_url')
+    .select('id, owner_id, owner_name, title, topic, level, minutes, language, description, objective, explanation, example, starter_code, expected_output, hint, reference_url, status, objectives, quiz, test_cases, hints')
+    .eq('status', 'published')
     .order('created_at', { ascending: false })
     .limit(200)
   if (error) throw error
@@ -52,6 +58,11 @@ export async function publishCustomLessons(lessons, userId, displayName) {
     expected_output: lesson.expectedOutput,
     hint: lesson.hint,
     reference_url: lesson.referenceUrl || '',
+    status: lesson.status || 'published',
+    objectives: Array.isArray(lesson.objectives) ? lesson.objectives : [],
+    quiz: lesson.quiz || null,
+    test_cases: Array.isArray(lesson.testCases) ? lesson.testCases : [],
+    hints: Array.isArray(lesson.hints) ? lesson.hints : [],
   }))
   const { error } = await supabase.from('custom_lessons').upsert(rows, { onConflict: 'id' })
   if (error) throw error

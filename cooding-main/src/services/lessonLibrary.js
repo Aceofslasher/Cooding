@@ -62,6 +62,26 @@ export function validateLesson(input) {
     throw new Error('Lesson id may only contain letters, numbers, and hyphens.')
   }
 
+  let quiz = null
+  if (input.quiz && typeof input.quiz === 'object' && !Array.isArray(input.quiz)) {
+    const question = typeof input.quiz.question === 'string' ? input.quiz.question.trim() : ''
+    const choices = Array.isArray(input.quiz.choices)
+      ? input.quiz.choices.filter((choice) => typeof choice === 'string' && choice.trim()).map((choice) => choice.trim())
+      : []
+    if (!question) throw new Error('Knowledge-check question text is required when a quiz is attached.')
+    if (choices.length < 2 || choices.length > 4) throw new Error('A knowledge check needs 2 to 4 answer choices.')
+    if (!Number.isInteger(input.quiz.answer) || input.quiz.answer < 0 || input.quiz.answer >= choices.length) {
+      throw new Error('Choose which answer choice is correct.')
+    }
+    if (question.length > 500) throw new Error('Knowledge-check question must be 500 characters or fewer.')
+    quiz = {
+      question,
+      choices,
+      answer: input.quiz.answer,
+      explanation: typeof input.quiz.explanation === 'string' ? input.quiz.explanation.trim().slice(0, 500) : '',
+    }
+  }
+
   return {
     id,
     title: input.title.trim(),
@@ -77,6 +97,11 @@ export function validateLesson(input) {
     expectedOutput: input.expectedOutput,
     hint: input.hint.trim(),
     referenceUrl,
+    status: ['draft', 'published', 'archived'].includes(input.status) ? input.status : 'published',
+    objectives: Array.isArray(input.objectives) ? input.objectives.filter((item) => typeof item === 'string' && item.trim()).slice(0, 6) : [],
+    quiz,
+    testCases: Array.isArray(input.testCases) ? input.testCases.slice(0, 20) : [],
+    hints: Array.isArray(input.hints) ? input.hints.filter((item) => typeof item === 'string' && item.trim()).slice(0, 5) : [],
     isCustom: true,
   }
 }

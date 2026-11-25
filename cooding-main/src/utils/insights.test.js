@@ -1,6 +1,6 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { buildPrerequisiteMap, recentActivity, recentCompletions, recommendNextLesson, summarizeMistakes } from './insights.js'
+import { buildPrerequisiteMap, buildTopicMastery, recentActivity, recentCompletions, recommendNextLesson, summarizeMistakes } from './insights.js'
 
 const now = new Date(2026, 10, 26, 12)
 
@@ -85,4 +85,42 @@ test('falls back to started lessons, then the next incomplete lesson', () => {
   assert.equal(started.lesson.id, 'two')
   const next = recommendNextLesson({ lessonsCompleted: ['one'] }, lessons)
   assert.equal(next.lesson.id, 'two')
+})
+
+test('derives topic mastery from completion, attempts, and unresolved mistakes', () => {
+  const lessons = [
+    { id: 'loops-1', topic: 'Loops', language: 'javascript' },
+    { id: 'loops-2', topic: 'Loops', language: 'javascript' },
+    { id: 'arrays-1', topic: 'Arrays', language: 'javascript' },
+    { id: 'html-1', topic: 'HTML Basics', language: 'html' },
+  ]
+  const topics = buildTopicMastery({
+    lessonsCompleted: ['loops-1', 'loops-2', 'html-1'],
+    lessonsStarted: ['loops-1', 'loops-2', 'arrays-1', 'html-1'],
+    attempts: [
+      { topic: 'Loops', passed: true },
+      { topic: 'Loops', passed: true },
+      { topic: 'Arrays', passed: false },
+      { topic: 'Arrays', passed: false },
+    ],
+    errorHistory: [
+      { topic: 'Arrays', resolved: false, occurrences: 2 },
+      { topic: 'Loops', resolved: true },
+    ],
+  }, lessons)
+  const byTopic = Object.fromEntries(topics.map((entry) => [entry.topic, entry]))
+  assert.equal(byTopic.Loops.status, 'Mastered')
+  assert.equal(byTopic.Arrays.status, 'Needs Practice')
+  assert.equal(byTopic.Arrays.unresolved, 2)
+  assert.equal(byTopic['HTML Basics'].status, 'Mastered')
+  assert.equal(topics[0].status, 'Needs Practice')
+})
+
+test('topics with a single failed attempt are in progress, not needs practice', () => {
+  const topics = buildTopicMastery({
+    lessonsStarted: ['loops-1'],
+    attempts: [{ topic: 'Loops', passed: false }],
+    errorHistory: [{ topic: 'Loops', resolved: true }],
+  }, [{ id: 'loops-1', topic: 'Loops', language: 'javascript' }])
+  assert.equal(topics[0].status, 'In Progress')
 })

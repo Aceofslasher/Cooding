@@ -75,6 +75,64 @@ export function recentCompletions(progress = {}, lessons = [], limit = 3) {
     .slice(0, limit)
 }
 
+export function buildTopicMastery(progress = {}, lessons = []) {
+  const completed = new Set(progress.lessonsCompleted || [])
+  const started = new Set(progress.lessonsStarted || [])
+  const entries = new Map()
+  const entryFor = (topic, language) => {
+    const key = String(topic || '').toLowerCase()
+    if (!key) return null
+    const existing = entries.get(key)
+    if (existing) {
+      if (!existing.language && language) existing.language = language
+      return existing
+    }
+    const created = {
+      topic,
+      language: language || 'javascript',
+      lessons: 0,
+      completed: 0,
+      started: 0,
+      attempts: 0,
+      passed: 0,
+      unresolved: 0,
+      status: 'Not Started',
+    }
+    entries.set(key, created)
+    return created
+  }
+  for (const lesson of lessons.filter((item) => !item.isCustom)) {
+    const entry = entryFor(lesson.topic, lesson.language)
+    if (!entry) continue
+    entry.lessons += 1
+    if (completed.has(lesson.id)) entry.completed += 1
+    if (started.has(lesson.id)) entry.started += 1
+  }
+  for (const attempt of progress.attempts || []) {
+    const entry = entryFor(attempt.topic || 'General practice', attempt.language)
+    if (!entry) continue
+    entry.attempts += 1
+    if (attempt.passed) entry.passed += 1
+  }
+  for (const row of progress.errorHistory || []) {
+    if (row.resolved) continue
+    const entry = entryFor(row.topic || 'General practice', row.language)
+    if (entry) entry.unresolved += Number(row.occurrences) || 1
+  }
+  const topics = [...entries.values()].map((entry) => {
+    const passRate = entry.attempts ? entry.passed / entry.attempts : null
+    let status = 'Not Started'
+    if (!entry.started && !entry.attempts && !entry.unresolved) status = 'Not Started'
+    else if (entry.unresolved > 0 || (entry.attempts >= 2 && passRate < 0.5)) status = 'Needs Practice'
+    else if (entry.lessons && entry.completed === entry.lessons) status = 'Mastered'
+    else status = 'In Progress'
+    return { ...entry, passRate, status }
+  })
+  const order = { 'Needs Practice': 0, 'In Progress': 1, Mastered: 2, 'Not Started': 3 }
+  topics.sort((first, second) => order[first.status] - order[second.status] || first.topic.localeCompare(second.topic))
+  return topics
+}
+
 export function recommendNextLesson(progress = {}, lessons = [], builtInLessons = null) {
   const pool = (builtInLessons || lessons.filter((lesson) => !lesson.isCustom)).filter(Boolean)
   if (!pool.length) return null

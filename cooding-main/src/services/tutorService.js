@@ -4,6 +4,12 @@ function localTutorReply({ question, code, error, context, mode = 'learning' }) 
   const prompt = [question, error].filter(Boolean).join(' ').toLowerCase()
   let explanation
 
+  if (mode === 'explain') {
+    return `This reply is a demo because the hosted tutor is not connected. To read code like a story, go from top to bottom:\n\n1. Find where the values are created.\n2. Follow every place those values are used.\n3. Note the lines that change the page or print a result.\n\n${code?.trim() ? 'With the hosted tutor enabled, I would walk through the code you attached line by line.' : 'Attach the code you want explained, then send the question again.'}`
+  }
+  if (mode === 'correct') {
+    return `This reply is a demo because the hosted tutor is not connected. A safe correction routine:\n\n1. Run the code and read the first error message.\n2. Fix only the reported line or block.\n3. Run again before changing anything else.\n\n${code?.trim() ? 'The hosted tutor can then suggest the smallest change and show a corrected snippet for you to review in the Playground.' : 'Attach the broken code so the hosted tutor can point at the exact line.'}`
+  }
   if (mode === 'quiz') {
     return `Quick check: which part of a loop decides when the loop should stop?\n\nA. The starting value\nB. The condition\nC. The variable name\n\nReply with A, B, or C and I will tell you why.`
   }
