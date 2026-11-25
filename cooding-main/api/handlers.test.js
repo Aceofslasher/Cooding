@@ -134,6 +134,57 @@ test('hosted tutor falls back to the next model when Gemini reports overload', a
   }
 })
 
+test('hosted tutor applies the selected mode and a larger token budget', async () => {
+  const originalFetch = global.fetch
+  const originalEnv = {
+    SUPABASE_URL: process.env.SUPABASE_URL,
+    SUPABASE_ANON_KEY: process.env.SUPABASE_ANON_KEY,
+    AI_API_KEY: process.env.AI_API_KEY,
+    AI_BASE_URL: process.env.AI_BASE_URL,
+    AI_MODEL: process.env.AI_MODEL,
+  }
+  process.env.SUPABASE_URL = 'https://example.supabase.co'
+  process.env.SUPABASE_ANON_KEY = 'test-anon-key'
+  process.env.AI_API_KEY = 'AQ.test-key'
+  process.env.AI_BASE_URL = 'https://generativelanguage.googleapis.com/v1beta/openai'
+  process.env.AI_MODEL = 'gemini-test'
+  let captured = null
+  global.fetch = async (url, options = {}) => {
+    if (url.endsWith('/auth/v1/user')) return { ok: true, json: async () => ({ id: 'student' }) }
+    captured = { url, options }
+    return { ok: true, json: async () => ({ candidates: [{ content: { parts: [{ text: 'Question A.' }] } }] }) }
+  }
+
+  try {
+    const response = createResponse()
+    await tutorHandler({
+      method: 'POST',
+      headers: { authorization: 'Bearer test-token' },
+      body: {
+        question: 'Quiz me on loops',
+        mode: 'quiz',
+        history: [
+          { role: 'assistant', content: 'Earlier hint' },
+          { role: 'assistant', content: 'Tutor connection error: timeout', mode: 'error' },
+          { role: 'user', content: 'Quiz me on loops' },
+        ],
+      },
+    }, response)
+    assert.equal(response.statusCode, 200)
+    const sent = JSON.parse(captured.options.body)
+    assert.match(sent.systemInstruction.parts[0].text, /Quiz mode/)
+    assert.equal(sent.generationConfig.maxOutputTokens, 1600)
+    assert.equal(sent.contents.length, 3)
+    assert.equal(sent.contents[0].role, 'model')
+  } finally {
+    global.fetch = originalFetch
+    for (const [key, value] of Object.entries(originalEnv)) {
+      if (value === undefined) delete process.env[key]
+      else process.env[key] = value
+    }
+  }
+})
+
 test('hosted tutor uses native Gemini auth for generativelanguage base URLs', async () => {
   const originalFetch = global.fetch
   const originalEnv = {

@@ -1,10 +1,13 @@
 import { getAuthHeaders } from './supabase'
 
-function localTutorReply({ question, code, error, context }) {
+function localTutorReply({ question, code, error, context, mode = 'learning' }) {
   const prompt = [question, error].filter(Boolean).join(' ').toLowerCase()
   let explanation
 
-  if (prompt.includes('hint') || prompt.includes('stuck')) {
+  if (mode === 'quiz') {
+    return `Quick check: which part of a loop decides when the loop should stop?\n\nA. The starting value\nB. The condition\nC. The variable name\n\nReply with A, B, or C and I will tell you why.`
+  }
+  if (mode === 'hint' || prompt.includes('hint') || prompt.includes('stuck')) {
     explanation = context?.hint || 'Try splitting the task into one small step. What value do you need first, and what should the program do with it?'
   } else if (prompt.includes('undefined') || prompt.includes('referenceerror')) {
     explanation = 'This usually means JavaScript cannot find a variable with that name. Check the spelling and make sure the variable is declared before this line runs.'
@@ -36,6 +39,7 @@ export async function askTutor(payload) {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', ...authHeaders },
       body: JSON.stringify(payload),
+      signal: AbortSignal.timeout(40_000),
     })
     const data = await response.json().catch(() => null)
     if (!response.ok) {
@@ -45,15 +49,20 @@ export async function askTutor(payload) {
       }
       const message = data && typeof data.error === 'string'
         ? data.error
-        : `Tutor endpoint returned HTTP ${response.status}.`
-      throw new Error(message)
+        : `The tutor endpoint returned HTTP ${response.status}.`
+      return { reply: `I could not reach the tutor service. ${message}`, mode: 'error', error: message, retryable: true }
     }
-    if (!data || typeof data.reply !== 'string' || !data.reply.trim()) throw new Error('Tutor returned an empty or invalid reply')
+    if (!data || typeof data.reply !== 'string' || !data.reply.trim()) {
+      return { reply: 'The tutor service returned an empty reply. Please try again.', mode: 'error', error: 'Empty reply', retryable: true }
+    }
     return { reply: data.reply, mode: 'ai' }
   } catch (error) {
-    const message = error instanceof Error && error.message
-      ? error.message
-      : 'An unexpected error occurred.'
-    return { reply: `Tutor connection error: ${message}`, mode: 'error' }
+    const timedOut = error instanceof DOMException && error.name === 'TimeoutError'
+    const message = timedOut
+      ? 'The tutor took too long to answer. Check your connection and try again.'
+      : error instanceof Error && error.message
+        ? error.message
+        : 'An unexpected error occurred.'
+    return { reply: `I could not reach the tutor service. ${message}`, mode: 'error', error: message, retryable: true }
   }
 }

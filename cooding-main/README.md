@@ -4,8 +4,12 @@ Loopwise is a small programming-learning workspace for students. It combines sho
 
 ## What works
 
-- Responsive dashboard, learning path, lessons, practice, multi-file playground, tutor, progress, history, and tabbed settings pages.
-- Seventy-two built-in lessons: sixty JavaScript lessons (20 each for beginner, intermediate, and advanced) and twelve HTML lessons. Each lesson links to a relevant W3Schools reference. These are educational starter content, not student results.
+- Responsive dashboard, learning path, lessons, practice, multi-file playground, tutor, progress, mistake history, history, and tabbed settings pages.
+- The dashboard shows per-course completion, the lesson to continue (a lesson you started, the next incomplete lesson, or one matching an unresolved mistake), recently completed lessons, recent attempts, and a seven-day activity chart built from real timestamps.
+- The AI tutor has Learning, Debugging, Hint, and Quiz modes, renders headings/lists/inline code/fenced code blocks, offers Copy on every snippet and Run for JavaScript and HTML, and shows a retry button when the provider fails. Signed-in conversations are stored in `ai_conversations`/`ai_messages` and restored on any device.
+- Mistake history groups failed attempts by topic, flags recurring topics, and links back to the matching lesson or practice exercise. Failed attempts also feed the dashboard recommendation and the tutor's context.
+- Seventy-two built-in lessons: sixty JavaScript lessons (20 each for beginner, intermediate, and advanced) and twelve HTML lessons. Each lesson links to a relevant W3Schools reference and has a knowledge check. These are educational starter content, not student results.
+- Lessons are grouped by level with per-level completion counts and show the previous lesson as a recommended prerequisite (advisory, not a hard lock).
 - A separate Lesson Studio for creating, importing, exporting, and removing custom JavaScript or HTML lessons. Custom lessons are stored in this browser; while signed in they are also published to the shared `custom_lessons` table so other accounts can open them from the learning path.
 - Monaco editing, a playground workspace with an HTML/CSS/JavaScript file explorer and tabs, JavaScript execution in a sandboxed browser frame, and restricted HTML/CSS previews. The playground also has an AI chat tab: ask the tutor to explain or change code, and fenced file blocks in its reply get an Apply button that writes them into the matching file.
 - A local tutor response mode that gives contextual hints without requiring an API key.
@@ -45,7 +49,7 @@ Vite's development server does not run Vercel serverless functions. To exercise 
 
 RLS is enabled on every table. Published learning content is readable to visitors; student records require an authenticated matching `auth.uid()`. Hidden test cases have no student-read policy unless `visible_to_student` is true. Never place the Supabase service-role key in the browser.
 
-Current cloud sync persists the profile (including first/last name and country), lesson status, coding-attempt records, and quiz scores. Published custom lessons are stored in Supabase. Tutor messages, the profile photo, notification choices, and the streak counter are kept in the browser snapshot. The UI remains usable while signed out, but progress is not persisted, and hosted AI endpoints require a signed-in session.
+Current cloud sync persists the profile (including first/last name and country), lesson status and completion timestamps, coding-attempt records, unresolved/resolved error history, quiz scores, and tutor conversation messages. Published custom lessons are stored in Supabase. The profile photo, notification choices, and the streak counter are still kept in the browser snapshot. The UI remains usable while signed out, but progress is not persisted, and hosted AI endpoints require a signed-in session.
 
 ## Configure AI and Python
 
@@ -75,7 +79,7 @@ npm run lint
 npm run build
 ```
 
-Tests cover progress summaries, output comparison, corrected attempts, secure endpoint defaults, streak counting, automatic skill-level thresholds, playground reply parsing, and the built-in curriculum. Browser QA verified the multi-file playground, HTML lessons and references, tabbed settings, custom HTML lessons, sandboxed JavaScript output and timeout, answer submission, quiz scoring, HTML/CSS previews, theme switching, and mobile layout. Manual follow-up is still needed for Supabase auth/RLS against a configured project, provider API failure cases, Python results from a configured Judge0 host, and hosted deployment.
+Tests cover progress summaries, output comparison, corrected attempts, secure endpoint defaults, streak counting, automatic skill-level thresholds, playground reply parsing, tutor markdown parsing, mistake/recommendation/activity insights, tutor mode prompts and token budget, prerequisites, and the built-in curriculum. Browser QA verified the dashboard insights, mistake history with a real failed attempt, practice deep links, prerequisite banners, the new HTML knowledge check, tutor mode selection, inline-code rendering, and the multi-file playground. Manual follow-up is still needed for signed-in Supabase sync (`lesson_progress`, `ai_messages`, `error_history`) against a configured project, live provider failure/retry cases, code-block Run inside tutor replies, Python results from a configured Judge0 host, and hosted deployment.
 
 ## Deploy to Vercel
 
@@ -90,7 +94,8 @@ Tests cover progress summaries, output comparison, corrected attempts, secure en
 
 - Authentication is optional for local learning; cloud data is protected by Supabase RLS.
 - The frontend currently bundles sample lessons and their visible expected output. Hidden database tests are not exposed, but a secure exercise-grading endpoint is not yet implemented.
-- Progress supports lesson completion, coding attempts, quiz scores, a daily three-lesson streak, and a simple recommendation based on the latest unsuccessful topic. Error-correction linking and richer adaptive recommendations need more implementation.
-- Cloud synchronization is implemented for profiles, lesson status, coding attempts, quiz scores, and published custom lessons, not tutor conversation history, the profile photo, or notification settings.
+- Progress supports lesson completion, coding attempts, quiz scores, a daily three-lesson streak, unresolved-mistake tracking, and weakness-based recommendations. Recommendations are rule-based; semantic adaptation (for example, difficulty inference beyond completed-lesson counts) is not implemented.
+- Cloud synchronization covers profiles, lesson status and timestamps, coding attempts, error history, quiz scores, tutor messages, and published custom lessons. The profile photo, notification settings, and the streak counter remain in the browser snapshot.
+- Prerequisites are advisory. A learner can still open any lesson out of order, and custom lessons have no prerequisite chain.
 - The tutor's built-in demo mode is rule-based. A real model is used only when the server endpoint and provider credentials are configured.
 - There is no password-reset flow, OAuth provider, account deletion flow, or automated end-to-end auth test yet.

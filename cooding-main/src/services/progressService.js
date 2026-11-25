@@ -79,17 +79,25 @@ const languageLabels = { javascript: 'JavaScript', python: 'Python', 'html & css
 
 export async function loadCloudProgress(userId) {
   if (!supabase) return null
-  const [profileResult, lessonResult, attemptResult, quizResult] = await Promise.all([
+  const [profileResult, lessonResult, attemptResult, quizResult, errorResult] = await Promise.all([
     supabase.from('profiles').select('*').eq('id', userId).maybeSingle(),
-    supabase.from('lesson_progress').select('lesson_id, status').eq('user_id', userId),
+    supabase.from('lesson_progress').select('lesson_id, status, started_at, completed_at').eq('user_id', userId),
     supabase.from('coding_attempts').select('id, exercise_title, topic, programming_language, execution_status, passed_tests, feedback, created_at').eq('user_id', userId).order('created_at', { ascending: false }).limit(100),
     supabase.from('quiz_attempts').select('id, lesson_id, score, total_questions, completed_at').eq('user_id', userId).order('completed_at', { ascending: false }).limit(100),
+    supabase.from('error_history').select('id, coding_attempt_id, topic, error_type, error_message, resolved, correction_summary, created_at').eq('user_id', userId).order('created_at', { ascending: false }).limit(150),
   ])
-  for (const result of [profileResult, lessonResult, attemptResult, quizResult]) {
+  for (const result of [profileResult, lessonResult, attemptResult, quizResult, errorResult]) {
     if (result.error) throw result.error
   }
   const lessonRows = lessonResult.data ?? []
   const profile = profileResult.data ?? {}
+  const lessonStartedAt = {}
+  const lessonCompletedAt = {}
+  for (const row of lessonRows) {
+    const slug = lessonSlugs[row.lesson_id] || row.lesson_id
+    if (row.started_at) lessonStartedAt[slug] = row.started_at
+    if (row.completed_at) lessonCompletedAt[slug] = row.completed_at
+  }
   return {
     displayName: profile.display_name || 'Learner',
     firstName: profile.first_name || '',
@@ -99,6 +107,18 @@ export async function loadCloudProgress(userId) {
     preferredLanguage: languageLabels[profile.preferred_language?.toLowerCase()] || 'JavaScript',
     lessonsStarted: lessonRows.map((row) => lessonSlugs[row.lesson_id] || row.lesson_id),
     lessonsCompleted: lessonRows.filter((row) => row.status === 'completed').map((row) => lessonSlugs[row.lesson_id] || row.lesson_id),
+    lessonStartedAt,
+    lessonCompletedAt,
+    errorHistory: (errorResult.data ?? []).map((row) => ({
+      id: row.id,
+      attemptId: row.coding_attempt_id,
+      topic: row.topic || 'General practice',
+      errorType: row.error_type,
+      errorMessage: row.error_message,
+      correctionSummary: row.correction_summary || '',
+      resolved: row.resolved,
+      createdAt: row.created_at,
+    })),
     attempts: (attemptResult.data ?? []).map((row) => ({
       id: row.id,
       title: row.exercise_title || 'Coding attempt',
@@ -161,10 +181,10 @@ export async function saveCloudLessonProgress(userId, lessonId, status) {
     return
   }
   row.completed_at = new Date().toISOString()
-  const { data: existing, error: lookupError } = await supabase.from('lesson_progress').select('id').eq('user_id', userId).eq('lesson_id', row.lesson_id).maybeSingle()
+  const { data: existing, error: lookupError } = await supabase.from('lesson_progress').select('id, completed_at').eq('user_id', userId).eq('lesson_id', row.lesson_id).maybeSingle()
   if (lookupError) throw lookupError
   const result = existing
-    ? await supabase.from('lesson_progress').update({ status, completed_at: row.completed_at }).eq('id', existing.id)
+    ? await supabase.from('lesson_progress').update({ status, completed_at: existing.completed_at || row.completed_at }).eq('id', existing.id)
     : await supabase.from('lesson_progress').insert(row)
   const { error } = result
   if (error) throw error
@@ -184,9 +204,14 @@ export async function saveCloudProfile(userId, profile) {
     last_name: profile.lastName || '',
     country: profile.country || '',
   }
-  let { error } = await supabase.from('profiles').upsert(extended)
-  if (error) ({ error } = await supabase.from('profiles').upsert(base))
-  if (error) throw error
+  const { error: extendedError } = await supabase.from('profiles').upsert(extended)
+  if (!extendedError) return
+  const { error: retryError } = await supabase.from('profiles').upsert(base)
+  if (retryError) throw retryError
+  if (extendedError.code === 'PGRST204' || /first_name|last_name|country/i.test(extendedError.message)) {
+    throw new Error('Name details did not sync. Apply supabase/migrations/202611250001_html_custom_lessons.sql in Supabase, then save again.')
+  }
+  throw extendedError
 }
 
 export async function saveCloudQuizAttempt(userId, attempt) {

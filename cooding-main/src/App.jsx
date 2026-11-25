@@ -2,10 +2,10 @@ import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import Editor from '@monaco-editor/react'
 import {
   Activity, ArrowDownRight, ArrowLeft, ArrowRight, ArrowUpRight, Award,
-  Bell, BookOpen, Braces, Camera, Check, CheckCircle2, ChevronDown, ChevronRight,
-  CircleHelp, Clock3, Code2, Eye, EyeOff, FileCode2, FileText, Flame, FolderOpen, Globe, GraduationCap,
+  Bell, BookOpen, Braces, Bug, Camera, Check, CheckCircle2, ChevronDown, ChevronRight,
+  CircleHelp, Clock3, Code2, Copy, Eye, EyeOff, FileCode2, FileText, Flame, FolderOpen, Globe, GraduationCap,
   History, KeyRound, LayoutDashboard, Lightbulb, ListChecks, LockKeyhole,
-  Menu, MessageCircle, Moon, Play, Plus, RotateCcw, Send, Settings,
+  Menu, MessageCircle, Moon, Play, Plus, RefreshCw, RotateCcw, Send, Settings,
   ShieldCheck, Sparkles, Target, Terminal, Trash2, Upload, UserRound, X,
 } from 'lucide-react'
 import { emptyProgress, lessonQuizzes, lessons, practiceExercises, readProgress } from './data/learningContent'
@@ -13,12 +13,15 @@ import LessonStudio from './components/LessonStudio'
 import { askTutor } from './services/tutorService'
 import { isCloudConfigured, supabase } from './services/supabase'
 import { loadCloudProgress, saveCloudAttempt, saveCloudLessonProgress, saveCloudProfile, saveCloudQuizAttempt } from './services/progressService'
+import { loadTutorHistory, saveTutorMessage, startTutorConversation } from './services/tutorHistory'
 import { deleteSharedCustomLesson, loadSharedCustomLessons, publishCustomLessons } from './services/customLessonService'
 import { readCustomLessons, saveCustomLessons } from './services/lessonLibrary'
 import { countCorrectedAttempts, matchesExpectedOutput } from './utils/progress'
 import { htmlToText } from './utils/html'
 import { deriveSkillLevel, skillLevelPlan } from './utils/skill'
 import { PLAYGROUND_AI_NOTE, playgroundFilePayload, resolvePlaygroundFile, splitAssistantReply } from './utils/playground'
+import { parseInline, parseTutorLines, parseTutorMarkdown, runnableTutorLanguage } from './utils/tutorMarkdown'
+import { buildPrerequisiteMap, recentActivity, recentCompletions, recommendNextLesson, summarizeMistakes } from './utils/insights'
 import { STREAK_GOAL, recordStreakCompletion, summarizeStreak } from './utils/streak'
 import './App.css'
 
@@ -35,6 +38,7 @@ const navigation = [
   ] },
   { section: 'YOUR SPACE', items: [
     { id: 'progress', label: 'My progress', icon: Activity },
+    { id: 'mistakes', label: 'Mistake history', icon: Bug },
     { id: 'history', label: 'Learning history', icon: History },
   ] },
 ]
@@ -42,7 +46,7 @@ const navigation = [
 const pageTitles = {
   dashboard: 'Overview', learn: 'Learning path', 'lesson-studio': 'Lesson studio', practice: 'Practice',
   playground: 'Playground', tutor: 'AI tutor', progress: 'My progress',
-  history: 'Learning history', settings: 'Profile & settings', lesson: 'Lesson workspace',
+  mistakes: 'Mistake history', history: 'Learning history', settings: 'Profile & settings', lesson: 'Lesson workspace',
 }
 
 const sandboxWorkerSource = `self.onmessage = ({ data }) => {
@@ -105,6 +109,10 @@ function App() {
   const [toast, setToast] = useState('')
   const [authUser, setAuthUser] = useState(null)
   const [currentCode, setCurrentCode] = useState('')
+  const [practiceFocus, setPracticeFocus] = useState(null)
+  const tutorConversationRef = useRef(null)
+  const tutorConversationPromise = useRef(null)
+  const savedMessageIds = useRef(new Set())
   const tutorLanguage = currentLesson?.language === 'html' ? 'html' : 'javascript'
   const localCustomIds = new Set(customLessons.map((lesson) => lesson.id))
   const builtInIds = new Set(lessons.map((lesson) => lesson.id))
@@ -158,10 +166,35 @@ function App() {
         ...cloudProgress,
         lessonsStarted: [...new Set([...(cloudProgress.lessonsStarted || []), ...previous.lessonsStarted.filter((id) => customIds.has(id))])],
         lessonsCompleted: [...new Set([...(cloudProgress.lessonsCompleted || []), ...previous.lessonsCompleted.filter((id) => customIds.has(id))])],
+        lessonStartedAt: { ...previous.lessonStartedAt, ...cloudProgress.lessonStartedAt },
+        lessonCompletedAt: { ...previous.lessonCompletedAt, ...cloudProgress.lessonCompletedAt },
+        errorHistory: cloudProgress.errorHistory || [],
         attempts: [...(cloudProgress.attempts || []), ...previous.attempts.filter((attempt) => customIds.has(attempt.lessonId))],
       }))
-    }).catch(() => setToast('Could not load cloud progress'))
+    }).catch((error) => setToast(error instanceof Error ? `Could not load cloud progress: ${error.message}` : 'Could not load cloud progress'))
   }, [authUser, customLessons])
+
+  useEffect(() => {
+    if (!authUser) {
+      tutorConversationRef.current = null
+      tutorConversationPromise.current = null
+      savedMessageIds.current = new Set()
+      return
+    }
+    let active = true
+    loadTutorHistory(authUser.id).then(({ conversationId, messages }) => {
+      if (!active) return
+      tutorConversationRef.current = conversationId
+      savedMessageIds.current = new Set(messages.map((message) => message.id))
+      setProgress((previous) => {
+        const known = new Set(messages.map((message) => message.id))
+        const localOnly = (previous.messages || []).filter((message) => !known.has(message.id))
+        const merged = [...messages, ...localOnly].sort((first, second) => new Date(first.createdAt || 0) - new Date(second.createdAt || 0))
+        return { ...previous, messages: merged }
+      })
+    }).catch((error) => setToast(error instanceof Error ? `Could not load tutor history: ${error.message}` : 'Could not load tutor history'))
+    return () => { active = false }
+  }, [authUser])
 
   useEffect(() => {
     if (!authUser) {
@@ -201,6 +234,7 @@ function App() {
     setProgress((previous) => ({
       ...previous,
       lessonsStarted: previous.lessonsStarted.includes(lesson.id) ? previous.lessonsStarted : [...previous.lessonsStarted, lesson.id],
+      lessonStartedAt: { ...previous.lessonStartedAt, [lesson.id]: previous.lessonStartedAt?.[lesson.id] || new Date().toISOString() },
     }))
     setCurrentLesson(lesson)
     setPage('lesson')
@@ -209,14 +243,33 @@ function App() {
 
   function recordAttempt(attempt) {
     const savedAttempt = { ...attempt, id: crypto.randomUUID(), createdAt: new Date().toISOString() }
-    setProgress((previous) => ({
-      ...previous,
-      attempts: [savedAttempt, ...previous.attempts],
-    }))
+    setProgress((previous) => {
+      const attempts = [savedAttempt, ...previous.attempts]
+      let errorHistory = previous.errorHistory || []
+      if (savedAttempt.topic) {
+        if (savedAttempt.passed) {
+          errorHistory = errorHistory.map((row) => (row.topic === savedAttempt.topic && !row.resolved
+            ? { ...row, resolved: true, correctionSummary: 'A later attempt for this topic passed.' }
+            : row))
+        } else {
+          errorHistory = [{
+            id: `local-${savedAttempt.id}`,
+            attemptId: savedAttempt.id,
+            topic: savedAttempt.topic,
+            errorType: savedAttempt.executionStatus === 'wrong_answer' ? 'incorrect_output' : savedAttempt.executionStatus,
+            errorMessage: savedAttempt.output || 'The program ran, but its output did not match the exercise requirement.',
+            resolved: false,
+            createdAt: savedAttempt.createdAt,
+          }, ...errorHistory]
+        }
+      }
+      return { ...previous, attempts, errorHistory }
+    })
     if (authUser && !savedAttempt.lessonId?.startsWith('custom-')) saveCloudAttempt(authUser.id, savedAttempt).catch(() => setToast('Attempt saved locally, but cloud sync failed'))
   }
 
   function completeLesson(lesson) {
+    const completedAt = new Date().toISOString()
     if (authUser) {
       setProgress((previous) => ({ ...previous, streak: recordStreakCompletion(previous.streak, new Date(), lesson.id) }))
     }
@@ -225,6 +278,7 @@ function App() {
       lessonsCompleted: previous.lessonsCompleted.includes(lesson.id)
         ? previous.lessonsCompleted
         : [...previous.lessonsCompleted, lesson.id],
+      lessonCompletedAt: { ...previous.lessonCompletedAt, [lesson.id]: previous.lessonCompletedAt?.[lesson.id] || completedAt },
     }))
     if (authUser && !lesson.isCustom) saveCloudLessonProgress(authUser.id, lesson.id, 'completed').catch(() => setToast('Lesson completed locally, but cloud sync failed'))
     setToast('Lesson marked complete')
@@ -234,6 +288,49 @@ function App() {
     const savedAttempt = { ...quizAttempt, id: crypto.randomUUID(), completedAt: new Date().toISOString() }
     setProgress((previous) => ({ ...previous, quizAttempts: [savedAttempt, ...previous.quizAttempts] }))
     if (authUser) saveCloudQuizAttempt(authUser.id, savedAttempt).catch(() => setToast('Quiz saved locally, but cloud sync failed'))
+  }
+
+  function ensureTutorConversation(userId) {
+    if (tutorConversationRef.current) return Promise.resolve(tutorConversationRef.current)
+    if (!tutorConversationPromise.current) {
+      tutorConversationPromise.current = startTutorConversation(userId)
+        .then((conversationId) => {
+          tutorConversationRef.current = conversationId
+          return conversationId
+        })
+        .finally(() => { tutorConversationPromise.current = null })
+    }
+    return tutorConversationPromise.current
+  }
+
+  function persistTutorMessage(message) {
+    const userId = authUser?.id
+    if (!userId) return
+    ensureTutorConversation(userId)
+      .then((conversationId) => (conversationId ? saveTutorMessage(userId, conversationId, message) : null))
+      .catch((error) => {
+        savedMessageIds.current.delete(message.id)
+        setToast(error instanceof Error ? `Tutor message not saved: ${error.message}` : 'Tutor message not saved')
+      })
+  }
+
+  function updateTutorMessages(messages) {
+    setProgress((previous) => ({ ...previous, messages }))
+    if (!authUser) return
+    for (const message of messages) {
+      if (savedMessageIds.current.has(message.id) || message.mode === 'error') continue
+      savedMessageIds.current.add(message.id)
+      persistTutorMessage(message)
+    }
+  }
+
+  function newTutorConversation() {
+    setProgress((previous) => ({ ...previous, messages: [] }))
+    tutorConversationRef.current = null
+    if (!authUser) return
+    startTutorConversation(authUser.id)
+      .then((conversationId) => { tutorConversationRef.current = conversationId })
+      .catch((error) => setToast(error instanceof Error ? `Could not start a new conversation: ${error.message}` : 'Could not start a new conversation'))
   }
 
   function changePage(nextPage) {
@@ -326,13 +423,14 @@ function App() {
         {page === 'dashboard' && <Dashboard progress={progressView} lessons={allLessons} onOpenLesson={openLesson} onNavigate={changePage} />}
         {page === 'learn' && <LearningPath progress={progress} lessons={allLessons} authUser={authUser} onOpenLesson={openLesson} />}
         {page === 'lesson-studio' && <LessonStudio lessons={customLessons} allLessons={allLessons} onAddLessons={addCustomLessons} onDeleteLesson={deleteCustomLesson} onOpenLesson={openLesson} />}
-        {page === 'lesson' && <LessonWorkspace key={currentLesson.id} lesson={currentLesson} lessons={allLessons} progress={progressView} authUser={authUser} onCodeChange={setCurrentCode} onComplete={completeLesson} onRecordAttempt={recordAttempt} onRecordQuiz={recordQuiz} onBack={() => changePage('learn')} onPrevious={() => openLesson(allLessons[Math.max(0, allLessons.findIndex((lesson) => lesson.id === currentLesson.id) - 1)])} onNext={() => openLesson(allLessons[(allLessons.findIndex((lesson) => lesson.id === currentLesson.id) + 1) % allLessons.length])} />}
+        {page === 'lesson' && <LessonWorkspace key={currentLesson.id} lesson={currentLesson} lessons={allLessons} progress={progressView} authUser={authUser} onCodeChange={setCurrentCode} onComplete={completeLesson} onRecordAttempt={recordAttempt} onRecordQuiz={recordQuiz} onBack={() => changePage('learn')} onPrevious={() => openLesson(allLessons[Math.max(0, allLessons.findIndex((lesson) => lesson.id === currentLesson.id) - 1)])} onNext={() => openLesson(allLessons[(allLessons.findIndex((lesson) => lesson.id === currentLesson.id) + 1) % allLessons.length])} onOpenPrerequisite={openLesson} />}
         {page === 'playground' && <Playground onCodeChange={setCurrentCode} isSignedIn={Boolean(authUser)} skillLevel={progressView.skillLevel} />}
-        {page === 'practice' && <Practice progress={progressView} authUser={authUser} onRecordAttempt={recordAttempt} />}
-        {page === 'tutor' && <TutorPage progress={progressView} currentCode={currentCode} currentLesson={currentLesson} tutorLanguage={tutorLanguage} onMessagesChange={(messages) => setProgress((previous) => ({ ...previous, messages }))} />}
+        {page === 'practice' && <Practice progress={progressView} authUser={authUser} onRecordAttempt={recordAttempt} focusExerciseId={practiceFocus} onFocusHandled={() => setPracticeFocus(null)} />}
+        {page === 'tutor' && <TutorPage progress={progressView} currentCode={currentCode} currentLesson={currentLesson} tutorLanguage={tutorLanguage} isSignedIn={Boolean(authUser)} onMessagesChange={updateTutorMessages} onNewConversation={newTutorConversation} />}
         {page === 'progress' && <ProgressPage progress={progressView} lessons={allLessons} />}
+        {page === 'mistakes' && <MistakeHistoryPage progress={progressView} lessons={allLessons} onOpenLesson={openLesson} onNavigate={changePage} onPracticeExercise={(exerciseId) => { setPracticeFocus(exerciseId); changePage('practice') }} />}
         {page === 'history' && <HistoryPage progress={progress} />}
-        {page === 'settings' && <SettingsPage progress={progressView} authUser={authUser} onSignOut={() => supabase?.auth.signOut()} onSave={(updates) => { setProgress((previous) => ({ ...previous, ...updates })); if (authUser) saveCloudProfile(authUser.id, updates).catch(() => setToast('Profile saved locally, but cloud sync failed')); setToast('Profile preferences saved') }} />}
+        {page === 'settings' && <SettingsPage progress={progressView} authUser={authUser} onSignOut={() => supabase?.auth.signOut()} onSave={(updates) => { setProgress((previous) => ({ ...previous, ...updates })); if (authUser) saveCloudProfile(authUser.id, updates).catch((error) => setToast(error instanceof Error ? `Profile saved locally, but cloud sync failed: ${error.message}` : 'Profile saved locally, but cloud sync failed')); setToast('Profile preferences saved') }} />}
       </main>
       {toast && <div className="toast"><CheckCircle2 size={17} />{toast}</div>}
     </div>
@@ -344,44 +442,65 @@ function PageIntro({ eyebrow, title, description, action }) {
 }
 
 function Dashboard({ progress, lessons, onOpenLesson, onNavigate }) {
-  const completed = progress.lessonsCompleted.length
+  const builtInLessons = lessons.filter((lesson) => !lesson.isCustom)
+  const builtInIds = new Set(builtInLessons.map((lesson) => lesson.id))
+  const completed = progress.lessonsCompleted.filter((id) => builtInIds.has(id)).length
   const attempted = progress.attempts.length
   const passed = progress.attempts.filter((attempt) => attempt.passed).length
-  const latestTopicAttempts = new Map()
-  for (const attempt of progress.attempts) {
-    if (attempt.topic && !latestTopicAttempts.has(attempt.topic)) latestTopicAttempts.set(attempt.topic, attempt)
-  }
-  const reviewTopic = [...latestTopicAttempts.values()].find((attempt) => !attempt.passed)?.topic
-  const reviewLesson = lessons.find((lesson) => lesson.topic === reviewTopic)
-  const nextLesson = reviewLesson || lessons.find((lesson) => !progress.lessonsCompleted.includes(lesson.id)) || lessons[0]
+  const recommendation = recommendNextLesson(progress, builtInLessons)
+  const nextLesson = recommendation?.lesson || lessons[0]
+  const courses = courseCatalog.map((course) => {
+    const courseLessons = builtInLessons.filter((lesson) => lesson.language === course.id)
+    const done = courseLessons.filter((lesson) => progress.lessonsCompleted.includes(lesson.id)).length
+    return { ...course, completed: done, total: courseLessons.length, percent: courseLessons.length ? Math.round((done / courseLessons.length) * 100) : 0 }
+  })
+  const recentLessons = recentCompletions(progress, builtInLessons, 3)
   const recentAttempts = progress.attempts.slice(0, 3)
+  const activity = recentActivity(progress, 7)
+  const activityMax = Math.max(1, ...activity.map((day) => day.count))
+  const weekTotal = activity.reduce((total, day) => total + day.count, 0)
+  const weekLessons = activity.reduce((total, day) => total + day.lessons, 0)
+  const mistakes = summarizeMistakes(progress.errorHistory || [])
+  const overallPercent = builtInLessons.length ? Math.round((completed / builtInLessons.length) * 100) : 0
 
   return <div className="page-content dashboard-page">
     <PageIntro eyebrow="YOUR LEARNING SPACE" title={`Good to see you, ${progress.displayName || 'Learner'}.`} description="A little practice today goes a long way." action={<Button variant="dark" onClick={() => onNavigate('playground')}><Code2 size={16} />Open playground</Button>} />
     <div className="dashboard-grid">
       <section className="welcome-panel">
-        <div className="welcome-copy"><span className="welcome-kicker"><span className="welcome-dot" />YOUR LEARNING PATH</span><h2>Small steps.<br />Real understanding.</h2><p>Learn a concept, try it yourself, and get a nudge when you need one.</p><Button variant="white" onClick={() => onOpenLesson(nextLesson)}>Continue learning<ArrowRight size={16} /></Button></div>
-        <div className="welcome-art" aria-hidden="true"><div className="orbit orbit-one" /><div className="orbit orbit-two" /><div className="orbit-core"><Code2 size={32} /></div><span className="orbit-chip orbit-chip-a">{ }</span><span className="orbit-chip orbit-chip-b">&lt;/&gt;</span><span className="orbit-chip orbit-chip-c">01</span></div>
+        <div className="welcome-copy"><span className="welcome-kicker"><span className="welcome-dot" />CONTINUE LEARNING</span><h2>Small steps.<br />Real understanding.</h2><p>{recommendation?.reason || 'Learn a concept, try it yourself, and get a nudge when you need one.'}</p><Button variant="white" onClick={() => onOpenLesson(nextLesson)}>Continue learning<ArrowRight size={16} /></Button></div>
+        <div className="welcome-art" aria-hidden="true"><div className="orbit orbit-one" /><div className="orbit orbit-two" /><div className="orbit-core"><Code2 size={32} /></div><span className="orbit-chip orbit-chip-a">{ }</span><span className="orbit-chip orbit-chip-b">&lt;/&gt;</span><span className="orbit-chip orbit-chip-c">{overallPercent}%</span></div>
         <div className="welcome-foot"><span>UP NEXT</span><strong>{nextLesson.title}</strong><span className="welcome-duration"><Clock3 size={13} />{nextLesson.minutes} min</span></div>
       </section>
       <section className="metric-panel">
         <div className="panel-heading"><div><span className="eyebrow">YOUR MOMENTUM</span><h2>Learning snapshot</h2></div><button className="text-link" onClick={() => onNavigate('progress')}>View progress<ArrowUpRight size={14} /></button></div>
         <div className="metric-grid">
-          <Metric label="Lessons completed" value={completed} icon={BookOpen} detail={`${progress.lessonsStarted?.length ?? 0} started`} />
+          <Metric label="Lessons completed" value={completed} icon={BookOpen} detail={`${progress.lessonsStarted?.length ?? 0} started · ${overallPercent}% of path`} />
           <Metric label="Exercises tried" value={attempted} icon={Code2} detail={attempted ? `${passed} passed so far` : 'Your attempts show here'} />
           <Metric label="Current level" value={progress.skillLevel} icon={Target} detail="Unlocks as you complete lessons" compact />
           <Metric label="Latest quiz" value={progress.quizAttempts.length ? `${progress.quizAttempts[0].score}/${progress.quizAttempts[0].totalQuestions}` : '—'} icon={Award} detail={progress.quizAttempts.length ? 'Most recent knowledge check' : 'No checks completed'} compact />
         </div>
-        <div className="snapshot-progress"><div className="snapshot-progress-label"><span>Course progress</span><strong>{lessons.length ? Math.round((completed / lessons.length) * 100) : 0}%</strong></div><div className="progress-track"><span style={{ width: `${Math.min(100, (completed / lessons.length) * 100)}%` }} /></div><span className="snapshot-footnote">{completed} of {lessons.length} learning path lessons completed</span></div>
+        <div className="course-progress-list">{courses.map((course) => <div className="course-progress-row" key={course.id}><div className="course-progress-label"><span>{course.name}</span><strong>{course.completed}/{course.total} · {course.percent}%</strong></div><div className="progress-track"><span style={{ width: `${course.percent}%` }} /></div></div>)}</div>
+        <span className="snapshot-footnote">{completed} of {builtInLessons.length} learning path lessons completed</span>
       </section>
       <section className="next-panel">
-        <div className="panel-heading"><div><span className="eyebrow">PICK UP WHERE YOU LEFT OFF</span><h2>Recommended next</h2></div><span className="recommendation-icon"><ArrowDownRight size={17} /></span></div>
-        <div className="recommendation-body"><div className="recommendation-number">0{lessons.indexOf(nextLesson) + 1}</div><div><span className="lesson-tag">{nextLesson.topic}</span><h3>{nextLesson.title}</h3><p>{nextLesson.description}</p></div></div>
-        <div className="recommendation-footer"><span><Clock3 size={14} />{nextLesson.minutes} min <i /> {nextLesson.level}</span><Button onClick={() => onOpenLesson(nextLesson)}>Start lesson<ArrowRight size={15} /></Button></div>
+        <div className="panel-heading"><div><span className="eyebrow">{progress.lessonStartedAt?.[nextLesson.id] ? 'PICK UP WHERE YOU LEFT OFF' : 'RECOMMENDED FOR YOU'}</span><h2>Recommended next</h2></div><span className="recommendation-icon"><ArrowDownRight size={17} /></span></div>
+        <div className="recommendation-body"><div className="recommendation-number">{String(builtInLessons.findIndex((lesson) => lesson.id === nextLesson.id) + 1).padStart(2, '0')}</div><div><span className="lesson-tag">{nextLesson.topic}</span><h3>{nextLesson.title}</h3><p>{recommendation?.reason || nextLesson.description}</p></div></div>
+        <div className="recommendation-footer"><span><Clock3 size={14} />{nextLesson.minutes} min <i /> {nextLesson.level}</span><Button onClick={() => onOpenLesson(nextLesson)}>{progress.lessonStartedAt?.[nextLesson.id] ? 'Resume lesson' : 'Start lesson'}<ArrowRight size={15} /></Button></div>
+      </section>
+      <section className="recent-panel">
+        <div className="panel-heading"><div><span className="eyebrow">WINS</span><h2>Recently completed</h2></div><button className="text-link" onClick={() => onNavigate('learn')}>Open path<ArrowUpRight size={14} /></button></div>
+        {recentLessons.length ? <div className="recent-list">{recentLessons.map((lesson) => <button className="recent-row recent-row-button" key={lesson.id} onClick={() => onOpenLesson(lesson)}><span className="attempt-status attempt-passed"><Check size={14} /></span><div className="recent-copy"><strong>{lesson.title}</strong><span>{lesson.topic} · {progress.lessonCompletedAt?.[lesson.id] ? new Date(progress.lessonCompletedAt[lesson.id]).toLocaleDateString() : lesson.level}</span></div><span className="result-label result-good">Done</span></button>)}</div> : <div className="empty-inline"><div className="empty-glyph"><CheckCircle2 size={18} /></div><div><strong>No lessons finished yet</strong><span>Complete a lesson and it will show up here.</span></div></div>}
       </section>
       <section className="recent-panel">
         <div className="panel-heading"><div><span className="eyebrow">YOUR WORK</span><h2>Recent attempts</h2></div><button className="text-link" onClick={() => onNavigate('history')}>View history<ArrowUpRight size={14} /></button></div>
         {recentAttempts.length ? <div className="recent-list">{recentAttempts.map((attempt) => <div className="recent-row" key={attempt.id}><span className={`attempt-status ${attempt.passed ? 'attempt-passed' : 'attempt-review'}`}>{attempt.passed ? <Check size={14} /> : <RotateCcw size={14} />}</span><div className="recent-copy"><strong>{attempt.title}</strong><span>{attempt.topic || 'Practice'} · {new Date(attempt.createdAt).toLocaleDateString()}</span></div><span className={`result-label ${attempt.passed ? 'result-good' : 'result-retry'}`}>{attempt.passed ? 'Passed' : 'Review'}</span></div>)}</div> : <div className="empty-inline"><div className="empty-glyph"><Terminal size={18} /></div><div><strong>Your first attempt starts here</strong><span>Write a little code and your learning history will grow here.</span></div></div>}
+      </section>
+      <section className="dashboard-activity">
+        <div className="panel-heading"><div><span className="eyebrow">THIS WEEK</span><h2>Daily learning activity</h2></div><button className="text-link" onClick={() => onNavigate('mistakes')}>Review mistakes<ArrowUpRight size={14} /></button></div>
+        <div className="activity-body">
+          <div className="activity-bars">{activity.map((day) => <div className="activity-bar" key={day.key}><div className="activity-bar-track"><span className={day.count ? 'activity-bar-filled' : ''} style={{ height: `${day.count ? Math.max(12, (day.count / activityMax) * 100) : 4}%` }} /></div><strong>{day.count}</strong><small>{day.label}</small></div>)}</div>
+          <div className="activity-summary"><div><strong>{weekTotal}</strong><span>activities this week</span></div><div><strong>{weekLessons}</strong><span>lessons completed</span></div><div><strong>{mistakes.unresolved}</strong><span>mistakes to revisit</span></div></div>
+        </div>
       </section>
     </div>
   </div>
@@ -429,6 +548,7 @@ function LearningPath({ progress, lessons, authUser, onOpenLesson }) {
   const [language, setLanguage] = useState('All languages')
   const [level, setLevel] = useState('All levels')
   const builtInLessons = lessons.filter((lesson) => !lesson.isCustom)
+  const prerequisites = buildPrerequisiteMap(builtInLessons)
   const myCustomLessons = lessons.filter((lesson) => lesson.isCustom && !lesson.ownerId)
   const sharedLessons = lessons.filter((lesson) => lesson.isCustom && lesson.ownerId)
   const matchesFilters = (lesson) => (language === 'Custom lessons' || language === 'All languages' || lesson.language === language.toLowerCase()) && (level === 'All levels' || lesson.level === level)
@@ -454,7 +574,10 @@ function LearningPath({ progress, lessons, authUser, onOpenLesson }) {
       const percent = course.lessons.length ? Math.round((course.completed / course.lessons.length) * 100) : 0
       return <div className="course-block" key={course.id}>
         <section className="course-overview"><div className="course-symbol"><CourseIcon size={22} /></div><div className="course-summary"><div><span className="course-label">{course.lessons.length} BUILT-IN LESSONS · {course.name.toUpperCase()}</span><h2>{course.title}</h2><p>{course.description}</p></div><div className="course-progress-wrap"><div className="course-progress-label"><span>Your progress</span><strong>{course.completed}/{course.lessons.length}</strong></div><div className="progress-track"><span style={{ width: `${percent}%` }} /></div></div></div></section>
-        {course.groups.map((group) => <section key={`${course.id}-${group.level}`} className="lesson-level-group"><div className="lesson-list-heading"><h2>{group.level}</h2><span>{group.lessons.length} lessons</span></div><LessonRows lessons={group.lessons} progress={progress} onOpenLesson={onOpenLesson} /></section>)}
+        {course.groups.map((group) => {
+          const groupDone = group.lessons.filter((lesson) => progress.lessonsCompleted.includes(lesson.id)).length
+          return <section key={`${course.id}-${group.level}`} className="lesson-level-group"><div className="lesson-list-heading"><h2>{group.level}</h2><span>{groupDone} of {group.lessons.length} complete</span></div><LessonRows lessons={group.lessons} progress={progress} onOpenLesson={onOpenLesson} prerequisites={prerequisites} /></section>
+        })}
       </div>
     })}
     {visibleCustom.length > 0 && <section className="lesson-level-group custom-lesson-group"><div className="lesson-list-heading"><h2>Your custom lessons</h2><span>{visibleCustom.length} lessons</span></div><LessonRows lessons={visibleCustom} progress={progress} onOpenLesson={onOpenLesson} /></section>}
@@ -463,22 +586,29 @@ function LearningPath({ progress, lessons, authUser, onOpenLesson }) {
   </div>
 }
 
-function LessonRows({ lessons, progress, onOpenLesson, showAuthor = false, authUserId }) {
+function LessonRows({ lessons, progress, onOpenLesson, showAuthor = false, authUserId, prerequisites }) {
   return <div className="lesson-list">{lessons.map((lesson, index) => {
     const done = progress.lessonsCompleted.includes(lesson.id)
     const started = progress.lessonsStarted?.includes(lesson.id)
     const authorLabel = showAuthor ? (lesson.ownerId && lesson.ownerId === authUserId ? 'Shared by you' : `Shared by ${lesson.author || 'a learner'}`) : ''
-    return <button key={lesson.id} className="lesson-row" onClick={() => onOpenLesson(lesson)}><span className={`lesson-index ${done ? 'lesson-index-done' : ''}`}>{done ? <Check size={16} /> : String(index + 1).padStart(2, '0')}</span><span className="lesson-row-copy"><span className="lesson-row-meta"><span>{lesson.topic}</span><i />{lesson.level}{authorLabel && <><i />{authorLabel}</>}</span><strong>{lesson.title}</strong><small>{lesson.description}</small></span><span className="lesson-row-time"><Clock3 size={14} />{lesson.minutes} min</span><span className={`lesson-row-status ${done ? 'status-complete' : ''}`}>{done ? 'Completed' : started ? 'In progress' : 'Start'}<ArrowRight size={15} /></span></button>
+    const prerequisite = prerequisites?.get(lesson.id)
+    const prerequisiteOpen = prerequisite && !done && !progress.lessonsCompleted.includes(prerequisite.id)
+    return <button key={lesson.id} className="lesson-row" onClick={() => onOpenLesson(lesson)}><span className={`lesson-index ${done ? 'lesson-index-done' : ''}`}>{done ? <Check size={16} /> : String(index + 1).padStart(2, '0')}</span><span className="lesson-row-copy"><span className="lesson-row-meta"><span>{lesson.topic}</span><i />{lesson.level}{authorLabel && <><i />{authorLabel}</>}{prerequisiteOpen && <><i /><span className="prereq-tag" title={`This lesson builds on ${prerequisite.title}`}>After {prerequisite.title}</span></>}</span><strong>{lesson.title}</strong><small>{lesson.description}</small></span><span className="lesson-row-time"><Clock3 size={14} />{lesson.minutes} min</span><span className={`lesson-row-status ${done ? 'status-complete' : ''}`}>{done ? 'Completed' : started ? 'In progress' : 'Start'}<ArrowRight size={15} /></span></button>
   })}</div>
 }
 
-function LessonWorkspace({ lesson, lessons, progress, authUser, onCodeChange, onComplete, onRecordAttempt, onRecordQuiz, onBack, onPrevious, onNext }) {
+function LessonWorkspace({ lesson, lessons, progress, authUser, onCodeChange, onComplete, onRecordAttempt, onRecordQuiz, onBack, onPrevious, onNext, onOpenPrerequisite }) {
   const [showExample, setShowExample] = useState(false)
   const complete = progress.lessonsCompleted.includes(lesson.id)
+  const courseLessons = lessons.filter((item) => !item.isCustom && item.language === lesson.language)
+  const courseIndex = courseLessons.findIndex((item) => item.id === lesson.id)
+  const prerequisite = courseIndex > 0 ? courseLessons[courseIndex - 1] : null
+  const prerequisiteOpen = Boolean(prerequisite && !progress.lessonsCompleted.includes(prerequisite.id))
   const referenceUrl = lesson.referenceUrl || (lesson.language === 'html' ? 'https://www.w3schools.com/html/' : 'https://www.w3schools.com/js/')
   return <div className="page-content workspace-page">
     <button className="back-link" onClick={onBack}><ArrowLeft size={15} />Back to learning path</button>
     <div className="workspace-heading"><div><div className="lesson-row-meta"><span>{lesson.topic}</span><i />{lesson.level}<i /><Clock3 size={13} />{lesson.minutes} min</div><h1>{lesson.title}</h1><p>{lesson.description}</p></div><span className={`lesson-state ${complete ? 'lesson-state-done' : ''}`}>{complete ? <CheckCircle2 size={15} /> : <BookOpen size={15} />}{complete ? 'Completed' : 'In progress'}</span></div>
+    {prerequisiteOpen && <div className="prereq-banner"><span className="prereq-icon"><LockKeyhole size={15} /></span><div><strong>This lesson builds on “{prerequisite.title}”</strong><span>Finish the earlier lesson first for the smoothest ride, or continue if you feel ready.</span></div><button className="text-link" onClick={() => onOpenPrerequisite(prerequisite)}>Open prerequisite<ArrowRight size={14} /></button></div>}
     <div className="workspace-grid"><section className="lesson-instructions"><div className="workspace-section-title"><span className="step-number">01</span><div><span className="eyebrow">THE IDEA</span><h2>What you will learn</h2></div></div><p className="lesson-explanation">{lesson.explanation}</p><div className="objective-box"><div className="objective-icon"><Target size={17} /></div><div><span>YOUR OBJECTIVE</span><strong>{lesson.objective}</strong></div></div><a className="reference-link" href={referenceUrl} target="_blank" rel="noreferrer">Read the W3Schools reference<ArrowUpRight size={14} /></a><div className="instruction-divider" /><div className="workspace-section-title compact-title"><span className="step-number">02</span><div><span className="eyebrow">YOUR TURN</span><h2>Try it yourself</h2></div></div><p className="exercise-prompt">Update the starter code so it produces the expected result. Run it to check your output.</p><div className="expected-output"><span>EXPECTED OUTPUT</span><code>{lesson.expectedOutput.split('\n').map((line, index) => <span key={index}>{line}</span>)}</code></div><button className="example-toggle" onClick={() => setShowExample((value) => !value)}><Lightbulb size={15} />{showExample ? 'Hide example' : 'Show example'}<ChevronDown className={showExample ? 'rotate-icon' : ''} size={14} /></button>{showExample && <pre className="example-code">{lesson.example}</pre>}</section>
       <EditorWorkspace key={lesson.id} starterCode={lesson.starterCode} language={lesson.language} expectedOutput={lesson.expectedOutput} title={lesson.title} topic={lesson.topic} onCodeChange={onCodeChange} onRecordAttempt={onRecordAttempt} hint={lesson.hint} context={lesson} lessons={lessons} isSignedIn={Boolean(authUser)} skillLevel={progress.skillLevel} onComplete={() => onComplete(lesson)} onPrevious={onPrevious} onNext={onNext} />
     </div>
@@ -772,7 +902,7 @@ function EditorWorkspace({ starterCode, language, expectedOutput, title, topic, 
     }
     setBusy(true)
     setFeedback('Thinking through a hint...')
-    const result = await askTutor({ question: 'Please give me a hint, not the full solution.', code, relatedLanguage: language, context: { ...context, title, topic, hint }, skillLevel })
+    const result = await askTutor({ question: 'Please give me a hint, not the full solution.', mode: 'hint', code, relatedLanguage: language, context: { ...context, title, topic, hint }, skillLevel })
     setFeedback(`${result.mode === 'demo' ? 'Tutor demo · ' : ''}${result.reply}`)
     setActiveOutputTab('feedback')
     setBusy(false)
@@ -790,7 +920,7 @@ function EditorWorkspace({ starterCode, language, expectedOutput, title, topic, 
     }
     setBusy(true)
     setFeedback('Reading the error and your code...')
-    const result = await askTutor({ question: 'Explain what this error means and guide me toward a fix without rewriting my whole solution.', error: output, code, relatedLanguage: language, context: { ...context, title, topic }, skillLevel })
+    const result = await askTutor({ question: 'Explain what this error means and guide me toward a fix without rewriting my whole solution.', mode: 'debugging', error: output, code, relatedLanguage: language, context: { ...context, title, topic }, skillLevel })
     setFeedback(`${result.mode === 'demo' ? 'Tutor demo · ' : ''}${result.reply}`)
     setActiveOutputTab('feedback')
     setBusy(false)
@@ -810,7 +940,7 @@ function EditorWorkspace({ starterCode, language, expectedOutput, title, topic, 
     <div className="monaco-wrap"><Editor height="340px" language={language} theme="vs-dark" value={code} onChange={(value) => { const nextCode = value ?? ''; setCode(nextCode); onCodeChange?.(nextCode) }} options={{ minimap: { enabled: false }, fontSize: 13, lineHeight: 22, padding: { top: 16, bottom: 12 }, scrollBeyondLastLine: false, wordWrap: 'on', automaticLayout: true, fontFamily: '"IBM Plex Mono", Consolas, monospace', lineNumbersMinChars: 3, renderLineHighlight: 'gutter', scrollbar: { verticalScrollbarSize: 7, horizontalScrollbarSize: 7 }, suggestOnTriggerCharacters: true }} /></div>
     <CodeRunner key={runId} code={code} language={language} runId={runId} onComplete={receiveRun} />
     <div className="output-panel"><div className="output-header"><div className="output-tabs"><button className={activeOutputTab === 'output' ? 'output-tab-active' : ''} onClick={() => setActiveOutputTab('output')}><Terminal size={14} />Output</button><button className={activeOutputTab === 'feedback' ? 'output-tab-active' : ''} onClick={() => setActiveOutputTab('feedback')}><Sparkles size={14} />Feedback</button></div><span className={`execution-status execution-${runStatus}`}>{runStatus === 'running' ? 'Running' : runStatus === 'success' ? 'Execution succeeded' : runStatus === 'error' ? executionStatus === 'compile_error' ? 'Compile error' : executionStatus === 'runtime_error' ? 'Runtime error' : executionStatus === 'timeout' || executionStatus === 'time_limit' ? 'Time limit' : executionStatus === 'infrastructure_error' ? 'Service unavailable' : 'Execution failed' : 'Ready'}</span></div>
-      {activeOutputTab === 'output' ? <pre className={`output-content ${runStatus === 'error' ? 'output-error' : ''}`}>{output || 'Run your code to see what happens.'}</pre> : <div className={`feedback-content ${feedback.includes('matches') ? 'feedback-success' : ''}`}>{feedback || 'Submit your answer for a check, or ask for a hint when you need a nudge.'}</div>}
+      {activeOutputTab === 'output' ? <pre className={`output-content ${runStatus === 'error' ? 'output-error' : ''}`}>{output || 'Run your code to see what happens.'}</pre> : <div className={`feedback-content ${feedback.includes('matches') ? 'feedback-success' : ''}`}>{feedback ? <TutorRichText text={feedback} /> : 'Submit your answer for a check, or ask for a hint when you need a nudge.'}</div>}
     </div>
     <div className="editor-footer"><div className="editor-footer-left"><button className="editor-action" onClick={getHint} disabled={busy}><Lightbulb size={15} />Get a hint</button><button className="editor-action" onClick={explainError} disabled={busy}><CircleHelp size={15} />Explain my error</button><button className="editor-action" onClick={submitAnswer}><CheckCircle2 size={15} />Submit answer</button></div><div className="editor-footer-right"><span className="safe-runtime"><ShieldCheck size={14} />Runs in an isolated browser frame</span>{onPrevious && <Button onClick={onPrevious} disabled={lessons.findIndex((lesson) => lesson.id === context?.id) <= 0}><ArrowLeft size={14} />Previous</Button>}{onNext && <Button onClick={onNext}>Next lesson<ArrowRight size={14} /></Button>}</div></div>
   </section>
@@ -857,8 +987,8 @@ function CodeRunner({ code, language, runId, onComplete }) {
   return <iframe ref={iframeRef} title="Sandboxed code output" className="sandbox-frame" sandbox="allow-scripts" srcDoc={documentContent} />
 }
 
-function Practice({ progress, authUser, onRecordAttempt }) {
-  const [activeId, setActiveId] = useState(null)
+function Practice({ progress, authUser, onRecordAttempt, focusExerciseId = null, onFocusHandled }) {
+  const [activeId, setActiveId] = useState(focusExerciseId)
   const [showHint, setShowHint] = useState(false)
   const [language, setLanguage] = useState('All languages')
   const attemptedTitles = new Set(progress.attempts.map((attempt) => attempt.title))
@@ -866,6 +996,11 @@ function Practice({ progress, authUser, onRecordAttempt }) {
   const active = practiceExercises.find((exercise) => exercise.id === activeId)
 
   useEffect(() => { setShowHint(false) }, [activeId])
+  useEffect(() => {
+    if (!focusExerciseId) return
+    setActiveId(focusExerciseId)
+    onFocusHandled?.()
+  }, [focusExerciseId, onFocusHandled])
 
   if (active) return <div className="page-content workspace-page">
     <button className="back-link" onClick={() => setActiveId(null)}><ArrowLeft size={15} />Back to practice</button>
@@ -892,41 +1027,158 @@ function Practice({ progress, authUser, onRecordAttempt }) {
   </div>
 }
 
-function TutorPage({ progress, currentCode, currentLesson, tutorLanguage, onMessagesChange }) {
+const TUTOR_MODES = [
+  { id: 'learning', label: 'Learning', icon: BookOpen, placeholder: 'Ask me to explain a concept step by step...' },
+  { id: 'debugging', label: 'Debugging', icon: Bug, placeholder: 'Paste an error, or describe what broke...' },
+  { id: 'hint', label: 'Hint', icon: Lightbulb, placeholder: 'Ask for a nudge without the full answer...' },
+  { id: 'quiz', label: 'Quiz', icon: ListChecks, placeholder: 'Ask me to quiz you, or answer the quiz question...' },
+]
+
+function TutorInline({ text }) {
+  return parseInline(text).map((token, index) => {
+    if (token.type === 'code') return <code className="tutor-inline-code" key={index}>{token.text}</code>
+    if (token.type === 'strong') return <strong key={index}>{token.text}</strong>
+    return token.text
+  })
+}
+
+function TutorText({ text }) {
+  return parseTutorLines(text).map((line, index) => {
+    if (line.type === 'heading') {
+      const Heading = `h${line.level}`
+      return <Heading key={index}><TutorInline text={line.text} /></Heading>
+    }
+    if (line.type === 'bullet') return <div className="tutor-line tutor-bullet" key={index}><span aria-hidden="true">•</span><span><TutorInline text={line.text} /></span></div>
+    if (line.type === 'numbered') return <div className="tutor-line tutor-numbered" key={index}><span>{line.marker}.</span><span><TutorInline text={line.text} /></span></div>
+    return <p key={index}><TutorInline text={line.text} /></p>
+  })
+}
+
+function TutorCodeBlock({ language, code, fileName }) {
+  const [copied, setCopied] = useState(false)
+  const [runId, setRunId] = useState(0)
+  const [result, setResult] = useState(null)
+  const runnable = runnableTutorLanguage(language)
+  const label = fileName || (language ? language.toUpperCase() : 'CODE')
+  async function copyCode() {
+    try {
+      await navigator.clipboard.writeText(code)
+      setCopied(true)
+      window.setTimeout(() => setCopied(false), 1600)
+    } catch {
+      setCopied(false)
+    }
+  }
+  return <div className="tutor-code">
+    <div className="tutor-code-head"><span>{label}</span><div className="tutor-code-actions"><button type="button" onClick={copyCode}>{copied ? <Check size={13} /> : <Copy size={13} />}{copied ? 'Copied' : 'Copy'}</button>{runnable && <button type="button" onClick={() => { setResult(null); setRunId((value) => value + 1) }}><Play size={13} />Run</button>}</div></div>
+    <pre><code>{code}</code></pre>
+    {runId > 0 && runnable && <div className={`tutor-run ${result?.error ? 'tutor-run-error' : ''}`}>
+      <CodeRunner key={runId} code={code} language={language} runId={runId} onComplete={setResult} />
+      {language !== 'html' && <pre>{result ? (result.error || result.output || '(No output yet)') : 'Running...'}</pre>}
+      {language === 'html' && result?.error && <pre>{result.error}</pre>}
+    </div>}
+  </div>
+}
+
+function TutorRichText({ text }) {
+  return <div className="tutor-rich">{parseTutorMarkdown(text).map((block, index) => (block.type === 'code'
+    ? <TutorCodeBlock key={index} language={block.language} code={block.code} fileName={block.fileName} />
+    : <TutorText key={index} text={block.text} />))}</div>
+}
+
+function TutorMessage({ message, displayName, onRetry }) {
+  const isUser = message.role === 'user'
+  const modeInfo = TUTOR_MODES.find((mode) => mode.id === message.tutorMode)
+  return <div className={`chat-message message-${message.role} ${message.mode === 'error' ? 'message-error' : ''}`}>
+    <span className="message-avatar">{isUser ? (displayName || 'L').slice(0, 1).toUpperCase() : <Sparkles size={14} />}</span>
+    <div className="message-body">
+      <div className="message-meta">
+        <strong>{isUser ? displayName : 'Loopwise tutor'}</strong>
+        {!isUser && modeInfo && <span className="message-mode">{modeInfo.label}</span>}
+        {message.mode === 'demo' && <span>DEMO RESPONSE</span>}
+        {message.mode === 'error' && <span>CONNECTION PROBLEM</span>}
+        {!isUser && message.tutorLanguage && <span>{message.tutorLanguage === 'html' ? 'HTML' : 'JavaScript'} context</span>}
+      </div>
+      {isUser
+        ? <p className="tutor-user-text">{message.content}</p>
+        : message.mode === 'error'
+          ? <div className="tutor-error"><p>{message.content}</p>{onRetry && <button type="button" className="tutor-retry" onClick={() => onRetry(message)}><RefreshCw size={13} />Try again</button>}</div>
+          : <TutorRichText text={message.content} />}
+    </div>
+  </div>
+}
+
+function TutorPage({ progress, currentCode, currentLesson, tutorLanguage, isSignedIn = false, onMessagesChange, onNewConversation }) {
   const [draft, setDraft] = useState('')
   const [pending, setPending] = useState(false)
   const [attachedCode, setAttachedCode] = useState(false)
+  const [tutorMode, setTutorMode] = useState('learning')
   const messages = progress.messages || []
   const bottomRef = useRef(null)
-  const lastAssistantMode = [...messages].reverse().find((message) => message.role === 'assistant')?.mode
-  useEffect(() => { bottomRef.current?.scrollIntoView({ behavior: 'smooth' }) }, [messages.length])
+  const lastAssistant = [...messages].reverse().find((message) => message.role === 'assistant')
+  const modeInfo = TUTOR_MODES.find((mode) => mode.id === tutorMode) || TUTOR_MODES[0]
+  useEffect(() => { bottomRef.current?.scrollIntoView({ behavior: 'smooth' }) }, [messages.length, pending])
 
-  async function sendMessage(text = draft) {
-    if (!text.trim() || pending) return
-    const userMessage = { id: crypto.randomUUID(), role: 'user', content: text.trim(), createdAt: new Date().toISOString() }
-    const nextMessages = [...messages, userMessage]
-    onMessagesChange(nextMessages)
-    setDraft('')
+  async function requestReply(text, requestMode, code, baseMessages) {
     setPending(true)
-    const recentMistakes = progress.attempts.filter((attempt) => !attempt.passed).slice(0, 3).map((attempt) => `${attempt.topic}: ${attempt.title}`)
-    const result = await askTutor({ question: text, code: attachedCode ? currentCode : '', relatedLanguage: tutorLanguage, skillLevel: progress.skillLevel, context: { title: currentLesson.title, topic: currentLesson.topic, objective: currentLesson.objective, recentMistakes }, history: nextMessages.slice(-6) })
-    onMessagesChange([...nextMessages, { id: crypto.randomUUID(), role: 'assistant', content: result.reply, mode: result.mode, createdAt: new Date().toISOString() }])
+    const cloudMistakes = (progress.errorHistory || []).filter((row) => !row.resolved).slice(0, 3).map((row) => `${row.topic}: ${row.errorMessage}`)
+    const recentMistakes = cloudMistakes.length
+      ? cloudMistakes
+      : progress.attempts.filter((attempt) => !attempt.passed).slice(0, 3).map((attempt) => `${attempt.topic}: ${attempt.title}`)
+    const result = await askTutor({
+      question: text,
+      mode: requestMode,
+      code,
+      relatedLanguage: tutorLanguage,
+      skillLevel: progress.skillLevel,
+      context: { title: currentLesson.title, topic: currentLesson.topic, objective: currentLesson.objective, recentMistakes },
+      history: baseMessages.filter((message) => message.role !== 'system' && message.mode !== 'error').slice(-10).map(({ role, content }) => ({ role, content })),
+    })
+    onMessagesChange([...baseMessages, {
+      id: crypto.randomUUID(),
+      role: 'assistant',
+      content: result.reply,
+      mode: result.mode,
+      tutorMode: requestMode,
+      tutorLanguage,
+      retryText: text,
+      retryCode: code,
+      createdAt: new Date().toISOString(),
+    }])
     setAttachedCode(false)
     setPending(false)
   }
 
-  const tutorStatus = lastAssistantMode === 'ai'
-    ? 'AI connected'
-    : lastAssistantMode === 'error'
+  async function sendMessage(text = draft) {
+    const trimmed = text.trim()
+    if (!trimmed || pending) return
+    const userMessage = { id: crypto.randomUUID(), role: 'user', content: trimmed, tutorMode, tutorLanguage, createdAt: new Date().toISOString() }
+    const nextMessages = [...messages, userMessage]
+    onMessagesChange(nextMessages)
+    setDraft('')
+    await requestReply(trimmed, tutorMode, attachedCode ? currentCode : '', nextMessages)
+  }
+
+  async function retryMessage(message) {
+    if (pending) return
+    const without = messages.filter((entry) => entry.id !== message.id)
+    onMessagesChange(without)
+    const previousUser = [...without].reverse().find((entry) => entry.role === 'user')
+    await requestReply(message.retryText || previousUser?.content || draft, message.tutorMode || tutorMode, message.retryCode ?? '', without)
+  }
+
+  const tutorStatus = !lastAssistant || lastAssistant.mode === 'demo'
+    ? 'Demo mode'
+    : lastAssistant.mode === 'error'
       ? 'AI unavailable'
-      : 'Demo mode'
-  const tutorSubtitle = lastAssistantMode === 'ai'
+      : 'AI connected'
+  const tutorSubtitle = tutorStatus === 'AI connected'
     ? 'Ready to help'
-    : lastAssistantMode === 'error'
-      ? 'AI connection failed'
+    : tutorStatus === 'AI unavailable'
+      ? 'The last reply failed. Try again.'
       : 'Learning mode · no API key needed'
 
-  return <div className="page-content tutor-page"><PageIntro eyebrow="A PATIENT PAIR PROGRAMMER" title="AI tutor" description="Ask about a concept, share an error, or request a small hint." action={<span className="tutor-mode-badge"><span />{tutorStatus}</span>} /><div className="tutor-layout"><section className="tutor-chat"><div className="chat-header"><div className="tutor-avatar"><Sparkles size={17} /></div><div><strong>Loopwise tutor</strong><span><span className="online-dot" />{tutorSubtitle}</span></div><button className="icon-button" title="New conversation" aria-label="New conversation" onClick={() => onMessagesChange([])}><Plus size={17} /></button></div><div className="chat-messages">{!messages.length && <div className="chat-welcome"><div className="chat-welcome-icon"><MessageCircle size={21} /></div><span className="eyebrow">LET'S FIGURE IT OUT</span><h2>What are you working on?</h2><p>I can explain an error, give you a hint, or help unpack a programming idea. I’ll guide you toward the answer rather than jump straight to it.</p><div className="suggestion-list"><button onClick={() => sendMessage('I got an error. Can you help me understand it?')}><span><CircleHelp size={15} /></span>Explain an error<ArrowRight size={14} /></button><button onClick={() => sendMessage('Give me a hint for the lesson I am working on.')}><span><Lightbulb size={15} /></span>Give me a hint<ArrowRight size={14} /></button><button onClick={() => sendMessage('Can you explain how loops work?')}><span><Code2 size={15} /></span>Explain a concept<ArrowRight size={14} /></button></div></div>}{messages.map((message) => <div className={`chat-message message-${message.role}`} key={message.id}><span className="message-avatar">{message.role === 'assistant' ? <Sparkles size={14} /> : (progress.displayName || 'L').slice(0, 1).toUpperCase()}</span><div><div className="message-meta"><strong>{message.role === 'assistant' ? 'Loopwise tutor' : progress.displayName}</strong>{message.mode === 'demo' && <span>DEMO RESPONSE</span>}{message.mode === 'error' && <span>CONNECTION ERROR</span>}</div><p>{message.content}</p></div></div>)}{pending && <div className="chat-message message-assistant"><span className="message-avatar"><Sparkles size={14} /></span><div><div className="message-meta"><strong>Loopwise tutor</strong></div><div className="typing-indicator"><i /><i /><i /></div></div></div>}<div ref={bottomRef} /></div><form className="chat-composer" onSubmit={(event) => { event.preventDefault(); sendMessage() }}><textarea value={draft} onChange={(event) => setDraft(event.target.value)} placeholder="Ask a programming question..." rows={2} onKeyDown={(event) => { if (event.key === 'Enter' && !event.shiftKey) { event.preventDefault(); sendMessage() } }} /><div className="composer-tools"><button type="button" className={`editor-action ${attachedCode ? 'attach-active' : ''}`} onClick={() => setAttachedCode((value) => !value)}><Code2 size={15} />{attachedCode ? 'Code attached' : 'Attach code'}</button><span>Enter to send · Shift + Enter for a new line</span><Button variant="dark" type="submit" disabled={!draft.trim() || pending}><Send size={14} />Send</Button></div></form></section><aside className="tutor-context"><span className="eyebrow">LEARNING CONTEXT</span><h2>Made for your pace</h2><p>Your tutor uses your question and skill level to keep its guidance approachable.</p><div className="context-row"><span className="context-icon"><GraduationCap size={16} /></span><div><small>Current level</small><strong>{progress.skillLevel}</strong></div></div><div className="context-row"><span className="context-icon"><BookOpen size={16} /></span><div><small>Lessons completed</small><strong>{progress.lessonsCompleted.length}</strong></div></div><div className="context-row"><span className="context-icon"><Code2 size={16} /></span><div><small>Practice attempts</small><strong>{progress.attempts.length}</strong></div></div><div className="privacy-note"><LockKeyhole size={15} /><span>Messages are stored in this browser in demo mode. Configure the secure tutor endpoint for AI responses.</span></div></aside></div></div>
+  return <div className="page-content tutor-page"><PageIntro eyebrow="A PATIENT PAIR PROGRAMMER" title="AI tutor" description="Ask about a concept, share an error, or request a small hint." action={<span className={`tutor-mode-badge ${tutorStatus === 'AI unavailable' ? 'tutor-mode-badge-error' : ''}`}><span />{tutorStatus}</span>} /><div className="tutor-layout"><section className="tutor-chat"><div className="chat-header"><div className="tutor-avatar"><Sparkles size={17} /></div><div><strong>Loopwise tutor</strong><span><span className="online-dot" />{tutorSubtitle}</span></div><button className="icon-button" title="New conversation" aria-label="New conversation" onClick={onNewConversation}><Plus size={17} /></button></div><div className="chat-messages">{!messages.length && <div className="chat-welcome"><div className="chat-welcome-icon"><MessageCircle size={21} /></div><span className="eyebrow">LET'S FIGURE IT OUT</span><h2>What are you working on?</h2><p>Pick a mode below: I can teach a concept step by step, debug an error, give a small hint, or quiz you.</p><div className="suggestion-list"><button onClick={() => sendMessage('Explain how loops work, step by step, with one small example.')}><span><BookOpen size={15} /></span>Teach me a concept<ArrowRight size={14} /></button><button onClick={() => sendMessage('I got an error. Can you help me understand it?')}><span><Bug size={15} /></span>Debug an error<ArrowRight size={14} /></button><button onClick={() => sendMessage('Quiz me on variables with three options.')}><span><ListChecks size={15} /></span>Check my knowledge<ArrowRight size={14} /></button></div></div>}{messages.map((message) => <TutorMessage key={message.id} message={message} displayName={progress.displayName} onRetry={retryMessage} />)}{pending && <div className="chat-message message-assistant"><span className="message-avatar"><Sparkles size={14} /></span><div><div className="message-meta"><strong>Loopwise tutor</strong>{modeInfo && <span className="message-mode">{modeInfo.label}</span>}</div><div className="typing-indicator"><i /><i /><i /></div></div></div>}<div ref={bottomRef} /></div><form className="chat-composer" onSubmit={(event) => { event.preventDefault(); sendMessage() }}><div className="tutor-mode-row" role="group" aria-label="Tutor mode">{TUTOR_MODES.map((mode) => { const ModeIcon = mode.icon; return <button key={mode.id} type="button" className={`tutor-mode-button ${tutorMode === mode.id ? 'tutor-mode-active' : ''}`} onClick={() => setTutorMode(mode.id)}><ModeIcon size={13} />{mode.label}</button> })}</div><textarea value={draft} onChange={(event) => setDraft(event.target.value)} placeholder={modeInfo.placeholder} rows={2} onKeyDown={(event) => { if (event.key === 'Enter' && !event.shiftKey) { event.preventDefault(); sendMessage() } }} /><div className="composer-tools"><button type="button" className={`editor-action ${attachedCode ? 'attach-active' : ''}`} onClick={() => setAttachedCode((value) => !value)}><Code2 size={15} />{attachedCode ? 'Code attached' : 'Attach code'}</button><span>Enter to send · Shift + Enter for a new line</span><Button variant="dark" type="submit" disabled={!draft.trim() || pending}><Send size={14} />Send</Button></div></form></section><aside className="tutor-context"><span className="eyebrow">LEARNING CONTEXT</span><h2>Made for your pace</h2><p>Your tutor uses your question, lesson, and skill level to keep its guidance approachable.</p><div className="context-row"><span className="context-icon"><GraduationCap size={16} /></span><div><small>Current level</small><strong>{progress.skillLevel}</strong></div></div><div className="context-row"><span className="context-icon"><BookOpen size={16} /></span><div><small>Lessons completed</small><strong>{progress.lessonsCompleted.length}</strong></div></div><div className="context-row"><span className="context-icon"><Code2 size={16} /></span><div><small>Practice attempts</small><strong>{progress.attempts.length}</strong></div></div><div className="context-row"><span className="context-icon"><Bug size={16} /></span><div><small>Unresolved mistakes</small><strong>{(progress.errorHistory || []).filter((row) => !row.resolved).length}</strong></div></div><div className="privacy-note"><LockKeyhole size={15} /><span>{isSignedIn ? 'Conversations are saved to your account and restored on any device.' : 'Sign in to save this conversation across devices.'}</span></div></aside></div></div>
 }
 
 function ProgressPage({ progress, lessons }) {
@@ -971,6 +1223,32 @@ function ProgressPage({ progress, lessons }) {
       <section className="progress-focus-panel"><span className="eyebrow">SKILL PROFILE</span><div className="skill-profile"><div className="skill-icon"><Target size={19} /></div><div><strong>{progress.skillLevel}</strong><span>Unlocked from lesson completion</span></div></div><div className="skill-level-steps">{levelSteps.map(([name, at]) => <span key={name} className={progress.skillLevel === name ? 'skill-step-active' : totalCompleted >= at ? 'skill-step-done' : ''}><strong>{name}</strong><small>{at ? `${at} lessons` : 'Start here'}</small></span>)}</div><p>{plan.nextLevel ? `${plan.lessonsToNext} more completed lesson${plan.lessonsToNext === 1 ? '' : 's'} to reach ${plan.nextLevel}.` : 'You have reached the highest level. Keep practicing to stay sharp.'} Levels unlock automatically: Intermediate at 15 completed lessons, Advanced at half of the built-in course.</p><div className="score-details"><span><ListChecks size={15} />{progress.quizAttempts.length} knowledge checks</span><span><CheckCircle2 size={15} />{corrected} errors corrected</span></div></section>
     </div>
     <div className="progress-note"><Lightbulb size={17} /><p><strong>A useful next step:</strong> revisit a topic where a recent attempt needed another try. Your mistakes are part of the learning record, not a score.</p></div></div>
+}
+
+function MistakeHistoryPage({ progress, lessons, onOpenLesson, onNavigate, onPracticeExercise }) {
+  const rows = progress.errorHistory || []
+  const summary = summarizeMistakes(rows)
+  const lessonsByTopic = new Map(lessons.filter((lesson) => !lesson.isCustom && lesson.topic).map((lesson) => [lesson.topic.toLowerCase(), lesson]))
+  const exerciseByTopic = new Map(practiceExercises.map((exercise) => [exercise.topic.toLowerCase(), exercise]))
+  return <div className="page-content">
+    <PageIntro eyebrow="TURN MISTAKES INTO PROGRESS" title="Mistake history" description="Every failed attempt is saved so you can spot patterns and close the gaps." action={<span className="learning-count"><Bug size={15} />{summary.total} recorded</span>} />
+    <div className="mistake-metrics">
+      <Metric label="To work on" value={summary.unresolved} icon={Target} detail="Unresolved mistakes" compact />
+      <Metric label="Recurring topics" value={summary.recurring.length} icon={RefreshCw} detail="Topics with repeat mistakes" compact />
+      <Metric label="Corrected" value={summary.resolved} icon={CheckCircle2} detail="Fixed by a later pass" compact />
+    </div>
+    {!rows.length
+      ? <div className="empty-state"><Bug size={22} /><strong>No mistakes recorded yet</strong><span>When an exercise does not pass, it appears here with the topic and message so you can revisit it.</span></div>
+      : <>
+        <section className="mistake-topics"><div className="panel-heading"><div><span className="eyebrow">PATTERNS</span><h2>Topics to revisit</h2></div></div><div className="mistake-topic-grid">{summary.topics.map((entry) => {
+          const lesson = lessonsByTopic.get(entry.topic.toLowerCase())
+          const exercise = exerciseByTopic.get(entry.topic.toLowerCase())
+          const primaryAction = lesson ? () => onOpenLesson(lesson) : exercise ? () => onPracticeExercise(exercise.id) : () => onNavigate('practice')
+          return <article className={`mistake-topic-card ${entry.unresolved ? '' : 'mistake-topic-clear'}`} key={entry.topic}><div className="mistake-topic-head"><span className="lesson-tag">{entry.topic}</span><span className={`mistake-count ${entry.unresolved ? 'mistake-count-open' : ''}`}>{entry.unresolved ? `${entry.unresolved} open` : 'Resolved'}</span></div><strong>{entry.unresolved ? `${entry.total} mistake${entry.total === 1 ? '' : 's'} recorded` : 'Corrected in a later attempt'}</strong><small>{entry.lastError || 'No message recorded'}</small><div className="mistake-topic-actions"><Button onClick={primaryAction}>{lesson ? 'Revisit lesson' : exercise ? 'Practice exercise' : 'Practice this topic'}<ArrowRight size={14} /></Button>{lesson && exercise && <button className="text-link" onClick={() => onPracticeExercise(exercise.id)}>Practice exercise<ArrowUpRight size={13} /></button>}{!exercise && entry.unresolved > 0 && <button className="text-link" onClick={() => onNavigate('tutor')}>Ask the tutor<ArrowUpRight size={13} /></button>}</div></article>
+        })}</div></section>
+        <section className="mistake-log"><div className="panel-heading"><div><span className="eyebrow">THE LOG</span><h2>Recent mistakes</h2></div><span className="recommendation-icon"><History size={16} /></span></div><div className="mistake-table">{rows.slice(0, 40).map((row) => <div className={`mistake-row ${row.resolved ? 'mistake-row-resolved' : ''}`} key={row.id}><span className={`attempt-status ${row.resolved ? 'attempt-passed' : 'attempt-review'}`}>{row.resolved ? <Check size={14} /> : <RotateCcw size={14} />}</span><div className="mistake-row-copy"><strong>{row.topic} <span className="mistake-type">{row.errorType}</span></strong><span>{row.errorMessage}</span></div><span className="mistake-date">{row.createdAt ? new Date(row.createdAt).toLocaleDateString() : ''}</span><span className={`result-label ${row.resolved ? 'result-good' : 'result-retry'}`}>{row.resolved ? 'Corrected' : 'Open'}</span></div>)}</div></section>
+      </>}
+  </div>
 }
 
 function HistoryPage({ progress }) {

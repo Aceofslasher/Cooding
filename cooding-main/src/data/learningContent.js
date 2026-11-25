@@ -1038,6 +1038,12 @@ export const lessonQuizzes = {
   'html-links': { question: 'Which attribute names a link destination?', choices: ['src', 'href', 'alt'], answer: 1 },
   'html-lists': { question: 'Which element creates a numbered list?', choices: ['<ul>', '<ol>', '<li>'], answer: 1 },
   'html-forms': { question: 'Which element describes a form control?', choices: ['<label>', '<legend>', '<meta>'], answer: 0 },
+  'html-paragraphs': { question: 'Which element groups sentences into a paragraph?', choices: ['<p>', '<par>', '<text>'], answer: 0 },
+  'html-images': { question: 'Which attribute describes an image when it cannot load?', choices: ['title', 'alt', 'caption'], answer: 1 },
+  'html-tables': { question: 'Which element defines a header cell in a table?', choices: ['<td>', '<th>', '<tr>'], answer: 1 },
+  'html-semantic': { question: 'Which element marks the main navigation area of a page?', choices: ['<nav>', '<div>', '<menu>'], answer: 0 },
+  'html-media': { question: 'Which attribute adds play and pause controls to a video?', choices: ['controls', 'autoplay', 'poster'], answer: 0 },
+  'html-meta': { question: 'Where do meta tags belong?', choices: ['Inside <body>', 'Inside <head>', 'After </html>'], answer: 1 },
 }
 
 export const practiceExercises = [
@@ -1059,8 +1065,11 @@ export const practiceExercises = [
 export const emptyProgress = {
   lessonsStarted: [],
   lessonsCompleted: [],
+  lessonStartedAt: {},
+  lessonCompletedAt: {},
   attempts: [],
   quizAttempts: [],
+  errorHistory: [],
   messages: [],
   displayName: 'Learner',
   firstName: '',
